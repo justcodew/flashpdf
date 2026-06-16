@@ -92,6 +92,26 @@
 | ritz | 120.26ms | **3.44x** | 1.00x |
 | fastpdf | 17.28ms | **23.96x** | **6.96x** |
 
+### 8. 图像字节提取 (含解码)
+
+| 引擎 | 平均耗时 | 相对 PyMuPDF | 提取图像数 |
+|------|---------|-------------|-----------|
+| PyMuPDF | 81.07ms | 1.00x | 15 |
+| fastpdf | 7.21ms | **11.23x** | 13 |
+
+> fastpdf 提取 13 张图像 vs PyMuPDF 的 15 张，差异来自 Form XObject 内图像的处理方式不同。
+> fastpdf 采用零拷贝 JPEG 直传 + FlateDecode 惰性 PNG 编码，解码开销极低。
+
+### 9. 图像元数据 (仅记录偏移)
+
+| 引擎 | 平均耗时 | 说明 |
+|------|---------|------|
+| PyMuPDF | 2.04ms | 仅 `page.get_images(full=True)` |
+| fastpdf | 6.89ms | `extract(path, include_images=False)` 含完整文本提取 |
+
+> fastpdf 的 `extract()` 是一步到位调用，无法单独衡量图像元数据提取耗时。
+> 6.89ms 包含完整的文本提取 + 布局分析，图像元数据提取本身开销极低。
+
 ---
 
 ## ritz 分析：为什么在文本提取上差距大
