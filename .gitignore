@@ -28,3 +28,6 @@ venv/
 *.pdf
 !test_data/*.pdf
 comparison_results.json
+.venv/
+__pycache__/
+*.pyc
