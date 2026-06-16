@@ -19,7 +19,7 @@
 ## 性能验证（阶段 6）
 
 - [x] **PyMuPDF 对比测试**：同一批 PDF 分别用 fastpdf 和 PyMuPDF 提取
-  - 单词重叠率: 89.9%
+  - 单词重叠率: 87.8%
   - 速度: ~30x (fastpdf 0.006s vs PyMuPDF 0.189s)
   - 关键修复: TJ 字间距空格检测、/Resources 间接引用解析、Type0 CID 宽度计算
   > 脚本: tests/pymupdf_comparison.py | 报告: docs/BENCHMARK.md
@@ -53,7 +53,7 @@
 
 ## 待改进（精度提升）
 
-- [ ] 提升单词重叠率到 95%+（当前 89.9%）
+- [ ] 提升单词重叠率到 95%+（当前 87.8%）
 - [ ] 改进 CID 字符解码的 CMap 映射完整性
 - [ ] 优化连字符 (hyphen) 处理 — 跨行连字符合并
 - [ ] 调优 TJ 字间距阈值 — 当前 150 可能需要根据字体自适应
