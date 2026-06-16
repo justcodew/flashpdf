@@ -13,9 +13,6 @@ const SPAN_GAP_FACTOR: f64 = 0.3;
 const LINE_VERT_FACTOR: f64 = 0.5;
 /// Minimum vertical gap between lines to start a new block (as fraction of font size).
 const BLOCK_GAP_FACTOR: f64 = 1.5;
-/// Minimum gap between columns as fraction of page width.
-const COLUMN_GAP_FACTOR: f64 = 0.05;
-
 /// Cluster extracted characters into spans, lines, and blocks.
 ///
 /// Input: flat list of CharInfo from content stream scanning.
@@ -25,124 +22,153 @@ pub fn cluster_chars(chars: &[CharInfo], font: &str, font_size: f64, color: u32)
         return Vec::new();
     }
 
-    // Step 0: Detect columns and split characters
-    let columns = detect_columns(chars);
+    // Step 0: Build spans first (before column detection)
+    let spans = build_spans(chars, font, font_size, color);
+
+    // Step 1: Detect columns at the span level
+    let columns = detect_columns_from_spans(&spans);
 
     if columns.len() <= 1 {
         // Single column: process normally
-        let spans = build_spans(chars, font, font_size, color);
         let lines = build_lines(spans, font_size);
         return build_blocks(lines, font_size);
     }
 
     // Multi-column: process each column independently, then merge
     let mut all_blocks = Vec::new();
-    for col_chars in columns {
-        let spans = build_spans(&col_chars, font, font_size, color);
-        let lines = build_lines(spans, font_size);
+    for col_spans in columns {
+        let lines = build_lines(col_spans, font_size);
         all_blocks.extend(build_blocks(lines, font_size));
     }
     all_blocks
 }
 
-/// Detect column boundaries by analyzing X coordinate distribution.
-/// Returns characters split into columns (left to right).
-fn detect_columns(chars: &[CharInfo]) -> Vec<Vec<CharInfo>> {
-    if chars.len() < 20 {
-        return vec![chars.to_vec()];
+/// Detect column boundaries at the span level.
+/// Uses a smoothed density histogram of span left-edge X positions.
+/// Finds the two highest peaks and splits at the valley between them.
+/// This handles cases where formula content fills the gap between columns.
+fn detect_columns_from_spans(spans: &[TextSpan]) -> Vec<Vec<TextSpan>> {
+    if spans.len() < 6 {
+        return vec![spans.to_vec()];
     }
 
-    // Use median-based bounds to filter outliers (formulas, rotated text, etc.)
-    let mut x_positions: Vec<f64> = chars.iter().map(|c| c.bbox[0]).collect();
-    x_positions.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let x_positions: Vec<f64> = spans.iter().map(|s| s.bbox[0]).collect();
 
-    // Use 10th and 90th percentiles as bounds (more aggressive filtering)
-    let p10_idx = (x_positions.len() as f64 * 0.10) as usize;
-    let p90_idx = (x_positions.len() as f64 * 0.90) as usize;
-    let x_min = x_positions[p10_idx];
-    let x_max = x_positions[p90_idx];
-    let page_width = x_max - x_min;
+    let x_min = x_positions.iter().cloned().fold(f64::MAX, f64::min);
+    let x_max = x_positions.iter().cloned().fold(f64::MIN, f64::max);
+    let x_range = x_max - x_min;
 
-    if page_width < 50.0 {
-        return vec![chars.to_vec()];
+    if x_range < 100.0 {
+        return vec![spans.to_vec()];
     }
 
-    // Build histogram of X positions (left edge of each char)
-    let num_bins = 200; // More bins for finer resolution
-    let bin_width = page_width / num_bins as f64;
+    // Build histogram with ~15px bins
+    let num_bins = ((x_range / 15.0) as usize).max(20).min(200);
+    let bin_width = x_range / num_bins as f64;
     let mut histogram = vec![0u32; num_bins];
 
-    for c in chars {
-        let x = c.bbox[0];
-        if x < x_min || x > x_max {
-            continue; // Skip outliers
-        }
+    for &x in &x_positions {
         let bin = ((x - x_min) / bin_width) as usize;
         let bin = bin.min(num_bins - 1);
         histogram[bin] += 1;
     }
 
-    // Smooth histogram with larger window
-    let mut smoothed = vec![0u32; num_bins];
-    for i in 2..num_bins - 2 {
-        smoothed[i] = histogram[i - 2] / 8
-            + histogram[i - 1] / 4
-            + histogram[i] / 4
-            + histogram[i + 1] / 4
-            + histogram[i + 2] / 8;
-    }
-    smoothed[0] = histogram[0];
-    smoothed[1] = histogram[1];
-    smoothed[num_bins - 2] = histogram[num_bins - 2];
-    smoothed[num_bins - 1] = histogram[num_bins - 1];
-
-    // Find column boundaries: look for bins with very few characters
-    let avg = smoothed.iter().sum::<u32>() as f64 / num_bins as f64;
-    let threshold = (avg * 0.2) as u32; // 20% of average = "empty" bin
-    let min_gap_bins = 3; // Minimum gap width in bins
-
-    let mut gaps = Vec::new();
-    let mut gap_start = None;
-
+    // Smooth with radius 5 to reduce noise
+    let smooth_radius = 5usize.min(num_bins / 4);
+    let mut smoothed = vec![0.0f64; num_bins];
     for i in 0..num_bins {
-        if smoothed[i] <= threshold {
-            if gap_start.is_none() {
-                gap_start = Some(i);
+        let lo = i.saturating_sub(smooth_radius);
+        let hi = (i + smooth_radius + 1).min(num_bins);
+        for j in lo..hi {
+            smoothed[i] += histogram[j] as f64;
+        }
+        smoothed[i] /= (hi - lo) as f64;
+    }
+
+    // Find local maxima (bins higher than both neighbors)
+    let mut peaks: Vec<(usize, f64)> = Vec::new();
+    for i in 1..num_bins - 1 {
+        if smoothed[i] > smoothed[i - 1] && smoothed[i] > smoothed[i + 1] {
+            peaks.push((i, smoothed[i]));
+        }
+    }
+
+    // Also consider edge bins as peaks if they're high
+    if smoothed[0] > smoothed[1] {
+        peaks.push((0, smoothed[0]));
+    }
+    if smoothed[num_bins - 1] > smoothed[num_bins - 2] {
+        peaks.push((num_bins - 1, smoothed[num_bins - 1]));
+    }
+
+    // Sort peaks by height (descending)
+    peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+    // Take the two highest peaks that are far enough apart (>= 10 bins)
+    if peaks.len() < 2 {
+        return vec![spans.to_vec()];
+    }
+
+    let mut peak1 = peaks[0].0;
+    let mut peak2 = peaks[1].0;
+
+    // If the top two peaks are too close, find the next best peak that's far enough
+    if peak2.abs_diff(peak1) < 10 {
+        for &(p, _v) in peaks.iter().skip(2) {
+            if p.abs_diff(peak1) >= 10 {
+                peak2 = p;
+                break;
             }
+        }
+    }
+
+    // Ensure peak1 < peak2
+    if peak1 > peak2 {
+        std::mem::swap(&mut peak1, &mut peak2);
+    }
+
+    // Peaks must be far enough apart (at least 10 bins ≈ 150px)
+    if peak2.abs_diff(peak1) < 10 {
+        return vec![spans.to_vec()];
+    }
+
+    // Find the valley (minimum density) between the two peaks
+    let mut valley = peak1;
+    let mut valley_density = smoothed[peak1];
+    for i in peak1..=peak2 {
+        if smoothed[i] < valley_density {
+            valley_density = smoothed[i];
+            valley = i;
+        }
+    }
+
+    // Valley must be meaningfully lower than both peaks.
+    // Use a relaxed threshold since formula content can fill the gap between columns.
+    let min_peak = smoothed[peak1].min(smoothed[peak2]);
+    if valley_density > min_peak * 0.85 {
+        return vec![spans.to_vec()];
+    }
+
+    let boundary = x_min + (valley as f64 + 0.5) * bin_width;
+
+    // Split spans at the boundary
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+
+    for s in spans {
+        if s.bbox[0] < boundary {
+            left.push(s.clone());
         } else {
-            if let Some(start) = gap_start {
-                if i - start >= min_gap_bins {
-                    // Found a significant gap
-                    let gap_center = (start + i) / 2;
-                    gaps.push(x_min + gap_center as f64 * bin_width);
-                }
-                gap_start = None;
-            }
+            right.push(s.clone());
         }
     }
 
-    if gaps.is_empty() {
-        return vec![chars.to_vec()];
+    // Both columns must have at least 2 spans
+    if left.len() < 2 || right.len() < 2 {
+        return vec![spans.to_vec()];
     }
 
-    // Split characters at column boundaries
-    let mut columns: Vec<Vec<CharInfo>> = vec![Vec::new(); gaps.len() + 1];
-
-    for c in chars {
-        let x = c.bbox[0];
-        let mut col = 0;
-        for (i, &boundary) in gaps.iter().enumerate() {
-            if x > boundary {
-                col = i + 1;
-            }
-        }
-        columns[col].push(c.clone());
-    }
-
-    // Filter out empty columns
-    let result: Vec<Vec<CharInfo>> = columns.into_iter().filter(|col| !col.is_empty()).collect();
-
-    result
+    vec![left, right]
 }
 
 /// Build spans from consecutive characters with similar position.
@@ -212,8 +238,11 @@ fn build_lines(spans: Vec<TextSpan>, font_size: f64) -> Vec<TextLine> {
     let mut lines: Vec<TextLine> = Vec::new();
     let mut current_spans: Vec<TextSpan> = vec![sorted[0].clone()];
     let line_threshold = font_size * LINE_VERT_FACTOR;
-    // Column gap threshold: if span starts this far left of previous span end, it's a new column
-    let col_gap_threshold = -font_size * 10.0; // Negative = span starts left of previous end
+    // Column gap thresholds:
+    // - Backward jump: span starts far left of previous span end (right→left column wrap)
+    // - Forward jump: span starts far right of previous span end (left→right column)
+    let col_gap_backward = -font_size * 10.0;
+    let col_gap_forward = font_size * 5.0; // Large forward jump = column boundary
 
     for i in 1..sorted.len() {
         let prev_y = current_spans.last().unwrap().bbox[1];
@@ -222,7 +251,9 @@ fn build_lines(spans: Vec<TextSpan>, font_size: f64) -> Vec<TextLine> {
         let curr_x = sorted[i].bbox[0]; // left edge of current span
         let h_gap = curr_x - prev_x2; // negative = overlap/backward jump
 
-        let same_line = (curr_y - prev_y).abs() < line_threshold && h_gap > col_gap_threshold;
+        let same_line = (curr_y - prev_y).abs() < line_threshold
+            && h_gap > col_gap_backward
+            && h_gap < col_gap_forward;
 
         if same_line {
             current_spans.push(sorted[i].clone());
