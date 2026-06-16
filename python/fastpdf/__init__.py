@@ -1,1 +1,1 @@
-from .fastpdf import extract, extract_many, __version__
+from .fastpdf import extract, extract_many, extract_links, __version__

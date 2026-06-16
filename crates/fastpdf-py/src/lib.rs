@@ -6,6 +6,7 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 fn fastpdf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract, m)?)?;
     m.add_function(wrap_pyfunction!(extract_many, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_links, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
@@ -73,6 +74,30 @@ fn extract_many<'py>(
             }
         }
         output.append(item)?;
+    }
+
+    Ok(output)
+}
+
+/// Extract hyperlinks from a PDF file.
+#[pyfunction]
+fn extract_links<'py>(
+    py: Python<'py>,
+    path: &str,
+) -> PyResult<Bound<'py, PyList>> {
+    let doc = fastpdf_core::Document::open(path)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+    let links = fastpdf_core::extract_links(&doc)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+    let output = PyList::empty_bound(py);
+    for link in &links {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("uri", &link.uri)?;
+        dict.set_item("bbox", link.bbox.to_vec())?;
+        dict.set_item("page", link.page)?;
+        output.append(dict)?;
     }
 
     Ok(output)

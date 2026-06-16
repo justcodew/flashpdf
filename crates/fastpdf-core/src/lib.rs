@@ -3,6 +3,7 @@ pub mod extract;
 pub mod font;
 pub mod image;
 pub mod layout;
+pub mod links;
 pub mod parser;
 pub mod types;
 
@@ -11,6 +12,7 @@ pub use extract::{extract, extract_doc, extract_many, ExtractOptions, ExtractRes
 pub use font::{build_font_map, parse_cmap, CMap, CIDFontInfo, CIDWidthRange, FontInfo};
 pub use image::{encode_png, resolve_images, ExtractedImage, ImageData};
 pub use layout::cluster_chars;
+pub use links::{extract_links, PageLink};
 pub use parser::{
     content_stream, parse_object, parse_object_from_bytes, scan_content_stream, Cursor,
     ContentResult, ImageRef, ParseError, ParseResult, TextBlock, TextLine, TextSpan,
