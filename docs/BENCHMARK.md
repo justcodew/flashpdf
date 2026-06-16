@@ -24,10 +24,25 @@
 
 ## 速度结果
 
+### fastpdf vs PyMuPDF
+
 | 引擎 | 耗时 | 速度比 |
 |------|------|--------|
 | PyMuPDF | 0.189s | 1.0x (基准) |
 | fastpdf | 0.006s | **~30x** |
+
+### fastpdf vs ritz vs PyMuPDF (5 次迭代平均)
+
+| 引擎 | 平均耗时 | 标准差 | 相对 PyMuPDF |
+|------|---------|--------|-------------|
+| PyMuPDF | 134.75ms | 0.62ms | 1.00x |
+| ritz | 39.40ms | 0.17ms | **3.42x** |
+| fastpdf | 5.66ms | 0.21ms | **23.82x** |
+
+**fastpdf vs ritz: 6.96x 更快**
+
+> ritz 是 Rust + MuPDF 封装，瓶颈在 MuPDF C 引擎的 stext 构造（约 39ms）。
+> fastpdf 是纯 Rust 自研解析器，无 MuPDF 依赖，直接字节操作。
 
 ## 精度结果
 
