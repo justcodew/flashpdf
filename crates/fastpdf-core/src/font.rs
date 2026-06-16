@@ -333,7 +333,53 @@ fn extract_differences(font_obj: &PdfObject<'_>) -> Option<HashMap<u8, Vec<u8>>>
     let encoding = font_obj.get(b"Encoding")?;
     let dict = match encoding {
         PdfObject::Dict(d) => d,
-        PdfObject::Ref(_) => return None, // Would need to resolve
+        PdfObject::Ref(_) => return None, // Would need to resolve via get_object
+        _ => return None,
+    };
+
+    let diff_array = dict.iter().find(|(k, _)| *k == b"Differences")?.1.as_array()?;
+
+    let mut result = HashMap::new();
+    let mut current_code: u8 = 0;
+
+    for item in diff_array {
+        match item {
+            PdfObject::Integer(n) => {
+                current_code = *n as u8;
+            }
+            PdfObject::Name(name) => {
+                result.insert(current_code, name.to_vec());
+                current_code = current_code.wrapping_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
+}
+
+/// Extract differences from encoding dict, resolving references.
+fn extract_differences_with_resolve<'a>(
+    font_obj: &PdfObject<'a>,
+    get_object: &impl Fn(u32) -> ParseResult<PdfObject<'a>>,
+) -> Option<HashMap<u8, Vec<u8>>> {
+    let encoding = font_obj.get(b"Encoding")?;
+
+    // Resolve reference if needed
+    let resolved;
+    let dict = match encoding {
+        PdfObject::Dict(d) => d,
+        PdfObject::Ref(r) => {
+            resolved = get_object(r.num).ok()?;
+            match &resolved {
+                PdfObject::Dict(d) => d,
+                _ => return None,
+            }
+        }
         _ => return None,
     };
 
@@ -387,6 +433,11 @@ pub fn build_font_map<'a>(
         };
 
         let mut info = extract_font_info(&font_obj);
+
+        // Try to resolve encoding differences if not already extracted
+        if info.differences.is_none() {
+            info.differences = extract_differences_with_resolve(&font_obj, &get_object);
+        }
 
         // Try to get ToUnicode CMap
         if let Some(PdfObject::Ref(r)) = font_obj.get(b"ToUnicode") {

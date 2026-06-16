@@ -838,10 +838,44 @@ fn emit_string(bytes: &[u8], state: &mut TextState, result: &mut ContentResult, 
             .unwrap_or(char_width_default);
         let char_height = font_size;
 
-        result.chars.push(CharInfo {
-            c,
-            bbox: [x, y, x + char_width, y + char_height],
-        });
+        // Expand ligatures: ﬁ → fi, ﬂ → fl, ﬃ → ffi, ﬄ → ffl
+        match c {
+            '\u{FB01}' => {
+                // fi ligature
+                let half = char_width * 0.5;
+                result.chars.push(CharInfo { c: 'f', bbox: [x, y, x + half, y + char_height] });
+                result.chars.push(CharInfo { c: 'i', bbox: [x + half, y, x + char_width, y + char_height] });
+            }
+            '\u{FB02}' => {
+                // fl ligature
+                let half = char_width * 0.5;
+                result.chars.push(CharInfo { c: 'f', bbox: [x, y, x + half, y + char_height] });
+                result.chars.push(CharInfo { c: 'l', bbox: [x + half, y, x + char_width, y + char_height] });
+            }
+            '\u{FB03}' => {
+                // ffi ligature
+                let third = char_width / 3.0;
+                result.chars.push(CharInfo { c: 'f', bbox: [x, y, x + third, y + char_height] });
+                result.chars.push(CharInfo { c: 'f', bbox: [x + third, y, x + third * 2.0, y + char_height] });
+                result.chars.push(CharInfo { c: 'i', bbox: [x + third * 2.0, y, x + char_width, y + char_height] });
+            }
+            '\u{FB04}' => {
+                // ffl ligature
+                let third = char_width / 3.0;
+                result.chars.push(CharInfo { c: 'f', bbox: [x, y, x + third, y + char_height] });
+                result.chars.push(CharInfo { c: 'f', bbox: [x + third, y, x + third * 2.0, y + char_height] });
+                result.chars.push(CharInfo { c: 'l', bbox: [x + third * 2.0, y, x + char_width, y + char_height] });
+            }
+            '\u{FB05}' | '\u{FB06}' => {
+                // st ligature
+                let half = char_width * 0.5;
+                result.chars.push(CharInfo { c: 's', bbox: [x, y, x + half, y + char_height] });
+                result.chars.push(CharInfo { c: 't', bbox: [x + half, y, x + char_width, y + char_height] });
+            }
+            _ => {
+                result.chars.push(CharInfo { c, bbox: [x, y, x + char_width, y + char_height] });
+            }
+        }
 
         // Advance text matrix
         let advance = char_width + state.char_spacing;
