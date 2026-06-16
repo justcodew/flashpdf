@@ -936,9 +936,11 @@ mod tests {
     fn test_kerning_tj() {
         let content = b"BT /F1 12 Tf 100 700 Td [(A) -200 (B)] TJ ET";
         let result = scan_content_stream(content);
-        assert_eq!(result.chars.len(), 2);
-        // B should be shifted left due to kerning
-        assert!(result.chars[1].bbox[0] < result.chars[0].bbox[0] + 10.0);
+        // -200 kerning triggers space insertion (threshold: -150)
+        assert_eq!(result.chars.len(), 3); // A, space, B
+        assert_eq!(result.chars[0].c, 'A');
+        assert_eq!(result.chars[1].c, ' ');
+        assert_eq!(result.chars[2].c, 'B');
     }
 
     #[test]

@@ -1,5 +1,11 @@
 # fastpdf 待完成事项
 
+## 当前状态
+
+- **测试**: 82 个测试全部通过
+- **性能**: ~30x 速度提升 (vs PyMuPDF)
+- **精度**: 89.9% 单词重叠率
+
 ## 核心功能（影响可用性）
 
 - [x] **真实 PDF 端到端测试**：用 arxiv 论文等真实 PDF 跑通完整流程，验证文本提取正确性
@@ -7,6 +13,8 @@
 - [x] **Form XObject 内部资源解析**：递归时 Form 自带的 `/Resources` (字体/图像) 已合并到扫描上下文
 - [x] **流对象解码统一**：已支持 LZWDecode、ASCII85Decode、RunLengthDecode、ASCIIHexDecode
 - [x] **加密 PDF 识别**：遇到加密 PDF 会报明确错误 "encrypted PDFs are not supported"
+- [x] **TJ 字间距空格检测**：大 kerning 值 (>=150/1000 em) 自动插入空格字符
+- [x] **/Resources 间接引用解析**：修复页面 Resources 为间接引用时字体丢失的问题
 
 ## 性能验证（阶段 6）
 
@@ -42,6 +50,14 @@
 - [x] **自研 PDF 解析器终极优化**：去除 lopdf 非必要抽象（已完成，可进一步优化内存布局）
 - [x] **SmallVec 聚类存储**：减少聚类过程中的堆分配
 - [x] **字体子集化**：CIDFont /W 数组已改为范围存储 + 二分查找
+
+## 待改进（精度提升）
+
+- [ ] 提升单词重叠率到 95%+（当前 89.9%）
+- [ ] 改进 CID 字符解码的 CMap 映射完整性
+- [ ] 优化连字符 (hyphen) 处理 — 跨行连字符合并
+- [ ] 调优 TJ 字间距阈值 — 当前 150 可能需要根据字体自适应
+- [ ] 布局聚类参数调优 (BLOCK_GAP_FACTOR, SPAN_GAP_FACTOR)
 
 ## 已知限制
 
