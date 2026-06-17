@@ -111,14 +111,24 @@ impl Operand {
 /// A 3x3 affine matrix (a b c d e f) for coordinate transforms.
 #[derive(Debug, Clone, Copy)]
 struct Matrix {
-    a: f64, b: f64,
-    c: f64, d: f64,
-    e: f64, f: f64,
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    e: f64,
+    f: f64,
 }
 
 impl Matrix {
     fn identity() -> Self {
-        Self { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: 0.0, f: 0.0 }
+        Self {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            e: 0.0,
+            f: 0.0,
+        }
     }
 
     fn new(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) -> Self {
@@ -300,7 +310,15 @@ pub fn scan_content_stream_full(
             }
             let op = &data[op_start..pos];
 
-            execute_operator_full(op, &operands, &mut state, &mut result, fonts, xobjects, depth);
+            execute_operator_full(
+                op,
+                &operands,
+                &mut state,
+                &mut result,
+                fonts,
+                xobjects,
+                depth,
+            );
             operands.clear();
         } else {
             if let Some(operand) = parse_operand(data, &mut pos) {
@@ -371,13 +389,13 @@ fn parse_number(data: &[u8], pos: &mut usize) -> Option<Operand> {
     if *pos < data.len() && (data[*pos] == b'+' || data[*pos] == b'-') {
         *pos += 1;
     }
-    while *pos < data.len() && (b'0'..=b'9').contains(&data[*pos]) {
+    while *pos < data.len() && data[*pos].is_ascii_digit() {
         *pos += 1;
     }
     if *pos < data.len() && data[*pos] == b'.' {
         has_dot = true;
         *pos += 1;
-        while *pos < data.len() && (b'0'..=b'9').contains(&data[*pos]) {
+        while *pos < data.len() && data[*pos].is_ascii_digit() {
             *pos += 1;
         }
     }
@@ -387,7 +405,7 @@ fn parse_number(data: &[u8], pos: &mut usize) -> Option<Operand> {
         if *pos < data.len() && (data[*pos] == b'+' || data[*pos] == b'-') {
             *pos += 1;
         }
-        while *pos < data.len() && (b'0'..=b'9').contains(&data[*pos]) {
+        while *pos < data.len() && data[*pos].is_ascii_digit() {
             *pos += 1;
         }
     }
@@ -432,7 +450,7 @@ fn parse_string_literal(data: &[u8], pos: &mut usize) -> Option<Operand> {
                         b')' => result.push(b')'),
                         b'0'..=b'9' => {
                             // Octal escape (up to 3 digits)
-                            let mut val = (esc - b'0') as u8;
+                            let mut val = esc - b'0';
                             for _ in 0..2 {
                                 if *pos < data.len() && (b'0'..=b'7').contains(&data[*pos]) {
                                     val = val.wrapping_mul(8) + (data[*pos] - b'0');
@@ -504,7 +522,21 @@ fn parse_name(data: &[u8], pos: &mut usize) -> Option<Operand> {
 }
 
 fn is_name_char(b: u8) -> bool {
-    !matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'/' | b'%' | b'\0')
+    !matches!(
+        b,
+        b' ' | b'\t'
+            | b'\n'
+            | b'\r'
+            | b'('
+            | b')'
+            | b'<'
+            | b'>'
+            | b'['
+            | b']'
+            | b'/'
+            | b'%'
+            | b'\0'
+    )
 }
 
 fn parse_array(data: &[u8], pos: &mut usize) -> Option<Operand> {
@@ -706,15 +738,20 @@ fn execute_operator_full(
                 let name = String::from_utf8_lossy(op.as_name()).to_string();
 
                 // Check if this is a Form XObject
-                if let Some(XObjectData::Form { data, matrix, bbox: _, fonts: form_fonts }) = xobjects.get(&name) {
+                if let Some(XObjectData::Form {
+                    data,
+                    matrix,
+                    bbox: _,
+                    fonts: form_fonts,
+                }) = xobjects.get(&name)
+                {
                     if depth < MAX_FORM_DEPTH {
                         // Save graphics state
                         state.save_gs();
 
                         // Apply Form matrix: concatenate with CTM
                         let form_matrix = Matrix::new(
-                            matrix[0], matrix[1], matrix[2],
-                            matrix[3], matrix[4], matrix[5],
+                            matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5],
                         );
                         state.ctm = form_matrix.mul(&state.ctm);
 
@@ -725,9 +762,8 @@ fn execute_operator_full(
                         }
 
                         // Recursively scan the Form's content stream with merged fonts
-                        let form_result = scan_content_stream_full(
-                            data, &merged_fonts, xobjects, depth + 1,
-                        );
+                        let form_result =
+                            scan_content_stream_full(data, &merged_fonts, xobjects, depth + 1);
 
                         // Merge results (adjust coordinates by current CTM)
                         for mut ch in form_result.chars {
@@ -785,7 +821,12 @@ fn execute_operator_full(
 
 // ─── String emission ───
 
-fn emit_string(bytes: &[u8], state: &mut TextState, result: &mut ContentResult, fonts: &HashMap<String, FontInfo>) {
+fn emit_string(
+    bytes: &[u8],
+    state: &mut TextState,
+    result: &mut ContentResult,
+    fonts: &HashMap<String, FontInfo>,
+) {
     let font_size = state.font_size;
     let h_scale = state.h_scale;
     let font_name = String::from_utf8_lossy(&state.font_name).to_string();
@@ -795,19 +836,26 @@ fn emit_string(bytes: &[u8], state: &mut TextState, result: &mut ContentResult, 
     let char_width_default = font_size * 0.6 * h_scale;
 
     // For Type0 (CID) fonts, bytes may be 2-byte codes
-    let is_cid = font_info.map_or(false, |f| f.is_type0);
+    let is_cid = font_info.is_some_and(|f| f.is_type0);
     let mut i = 0;
 
     while i < bytes.len() {
         let (c, code_bytes) = if is_cid && i + 1 < bytes.len() {
             // 2-byte CID code
             let _code = ((bytes[i] as u32) << 8) | (bytes[i + 1] as u32);
-            let decoded = font_info.map_or('\u{FFFD}', |f| f.decode_char(&[bytes[i], bytes[i + 1]]));
+            let decoded =
+                font_info.map_or('\u{FFFD}', |f| f.decode_char(&[bytes[i], bytes[i + 1]]));
             (decoded, vec![bytes[i], bytes[i + 1]])
         } else {
             // Single byte
             let decoded = font_info.map_or_else(
-                || if bytes[i] < 128 { bytes[i] as char } else { '\u{FFFD}' },
+                || {
+                    if bytes[i] < 128 {
+                        bytes[i] as char
+                    } else {
+                        '\u{FFFD}'
+                    }
+                },
                 |f| f.decode_char(&[bytes[i]]),
             );
             (decoded, vec![bytes[i]])
@@ -844,37 +892,76 @@ fn emit_string(bytes: &[u8], state: &mut TextState, result: &mut ContentResult, 
             '\u{FB01}' => {
                 // fi ligature
                 let half = char_width * 0.5;
-                result.chars.push(CharInfo { c: 'f', bbox: [x, y, x + half, y + char_height] });
-                result.chars.push(CharInfo { c: 'i', bbox: [x + half, y, x + char_width, y + char_height] });
+                result.chars.push(CharInfo {
+                    c: 'f',
+                    bbox: [x, y, x + half, y + char_height],
+                });
+                result.chars.push(CharInfo {
+                    c: 'i',
+                    bbox: [x + half, y, x + char_width, y + char_height],
+                });
             }
             '\u{FB02}' => {
                 // fl ligature
                 let half = char_width * 0.5;
-                result.chars.push(CharInfo { c: 'f', bbox: [x, y, x + half, y + char_height] });
-                result.chars.push(CharInfo { c: 'l', bbox: [x + half, y, x + char_width, y + char_height] });
+                result.chars.push(CharInfo {
+                    c: 'f',
+                    bbox: [x, y, x + half, y + char_height],
+                });
+                result.chars.push(CharInfo {
+                    c: 'l',
+                    bbox: [x + half, y, x + char_width, y + char_height],
+                });
             }
             '\u{FB03}' => {
                 // ffi ligature
                 let third = char_width / 3.0;
-                result.chars.push(CharInfo { c: 'f', bbox: [x, y, x + third, y + char_height] });
-                result.chars.push(CharInfo { c: 'f', bbox: [x + third, y, x + third * 2.0, y + char_height] });
-                result.chars.push(CharInfo { c: 'i', bbox: [x + third * 2.0, y, x + char_width, y + char_height] });
+                result.chars.push(CharInfo {
+                    c: 'f',
+                    bbox: [x, y, x + third, y + char_height],
+                });
+                result.chars.push(CharInfo {
+                    c: 'f',
+                    bbox: [x + third, y, x + third * 2.0, y + char_height],
+                });
+                result.chars.push(CharInfo {
+                    c: 'i',
+                    bbox: [x + third * 2.0, y, x + char_width, y + char_height],
+                });
             }
             '\u{FB04}' => {
                 // ffl ligature
                 let third = char_width / 3.0;
-                result.chars.push(CharInfo { c: 'f', bbox: [x, y, x + third, y + char_height] });
-                result.chars.push(CharInfo { c: 'f', bbox: [x + third, y, x + third * 2.0, y + char_height] });
-                result.chars.push(CharInfo { c: 'l', bbox: [x + third * 2.0, y, x + char_width, y + char_height] });
+                result.chars.push(CharInfo {
+                    c: 'f',
+                    bbox: [x, y, x + third, y + char_height],
+                });
+                result.chars.push(CharInfo {
+                    c: 'f',
+                    bbox: [x + third, y, x + third * 2.0, y + char_height],
+                });
+                result.chars.push(CharInfo {
+                    c: 'l',
+                    bbox: [x + third * 2.0, y, x + char_width, y + char_height],
+                });
             }
             '\u{FB05}' | '\u{FB06}' => {
                 // st ligature
                 let half = char_width * 0.5;
-                result.chars.push(CharInfo { c: 's', bbox: [x, y, x + half, y + char_height] });
-                result.chars.push(CharInfo { c: 't', bbox: [x + half, y, x + char_width, y + char_height] });
+                result.chars.push(CharInfo {
+                    c: 's',
+                    bbox: [x, y, x + half, y + char_height],
+                });
+                result.chars.push(CharInfo {
+                    c: 't',
+                    bbox: [x + half, y, x + char_width, y + char_height],
+                });
             }
             _ => {
-                result.chars.push(CharInfo { c, bbox: [x, y, x + char_width, y + char_height] });
+                result.chars.push(CharInfo {
+                    c,
+                    bbox: [x, y, x + char_width, y + char_height],
+                });
             }
         }
 
@@ -929,7 +1016,8 @@ mod tests {
 
     #[test]
     fn test_multiple_text_blocks() {
-        let content = b"BT /F1 12 Tf 100 700 Td (Line1) Tj ET BT /F1 12 Tf 100 680 Td (Line2) Tj ET";
+        let content =
+            b"BT /F1 12 Tf 100 700 Td (Line1) Tj ET BT /F1 12 Tf 100 680 Td (Line2) Tj ET";
         let result = scan_content_stream(content);
         assert_eq!(result.chars.len(), 10); // Line1 + Line2
     }

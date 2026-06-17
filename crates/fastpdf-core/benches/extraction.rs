@@ -13,7 +13,9 @@ fn bench_content_stream_scan(c: &mut Criterion) {
     let mut large = Vec::new();
     large.extend_from_slice(b"BT /F1 12 Tf ");
     for i in 0..100 {
-        large.extend_from_slice(format!("100 {} Td (Line {} text content here) Tj ", 700 - i * 14, i).as_bytes());
+        large.extend_from_slice(
+            format!("100 {} Td (Line {} text content here) Tj ", 700 - i * 14, i).as_bytes(),
+        );
     }
     large.extend_from_slice(b"ET");
 
@@ -101,5 +103,10 @@ fn bench_parser(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_content_stream_scan, bench_full_extraction, bench_parser);
+criterion_group!(
+    benches,
+    bench_content_stream_scan,
+    bench_full_extraction,
+    bench_parser
+);
 criterion_main!(benches);

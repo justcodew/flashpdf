@@ -56,8 +56,7 @@ pub fn resolve_images<'a>(
         let name_bytes = img_ref.name.as_bytes();
 
         // First try to find in page's XObject dict
-        let xobj_ref = find_in_dict(xobjects, name_bytes)
-            .and_then(|v| v.as_ref());
+        let xobj_ref = find_in_dict(xobjects, name_bytes).and_then(|v| v.as_ref());
 
         let xobj_num = if let Some(r) = xobj_ref {
             r.num
@@ -69,8 +68,12 @@ pub fn resolve_images<'a>(
                     if let Ok(form_obj) = get_object(form_ref.num) {
                         let subtype = form_obj.get(b"Subtype").and_then(|v| v.as_name());
                         if subtype == Some(b"Form") {
-                            if let Some(PdfObject::Dict(form_xobjects)) = form_obj.get(b"Resources").and_then(|r| r.get(b"XObject")) {
-                                if let Some(PdfObject::Ref(img_ref)) = find_in_dict(form_xobjects, name_bytes) {
+                            if let Some(PdfObject::Dict(form_xobjects)) =
+                                form_obj.get(b"Resources").and_then(|r| r.get(b"XObject"))
+                            {
+                                if let Some(PdfObject::Ref(img_ref)) =
+                                    find_in_dict(form_xobjects, name_bytes)
+                                {
                                     found = Some(img_ref.num);
                                     break;
                                 }
@@ -100,7 +103,10 @@ pub fn resolve_images<'a>(
         // Extract metadata
         let width = xobj.get(b"Width").and_then(|v| v.as_i64()).unwrap_or(0) as u32;
         let height = xobj.get(b"Height").and_then(|v| v.as_i64()).unwrap_or(0) as u32;
-        let bpc = xobj.get(b"BitsPerComponent").and_then(|v| v.as_i64()).unwrap_or(8) as u8;
+        let bpc = xobj
+            .get(b"BitsPerComponent")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(8) as u8;
         let colorspace = extract_colorspace(&xobj);
         let filter = extract_filter(&xobj);
         let ext = filter_to_ext(&filter);
@@ -123,7 +129,10 @@ pub fn resolve_images<'a>(
     result
 }
 
-fn find_in_dict<'a>(dict: &'a [(&'a [u8], PdfObject<'a>)], key: &[u8]) -> Option<&'a PdfObject<'a>> {
+fn find_in_dict<'a>(
+    dict: &'a [(&'a [u8], PdfObject<'a>)],
+    key: &[u8],
+) -> Option<&'a PdfObject<'a>> {
     for (k, v) in dict {
         if *k == key {
             return Some(v);
@@ -153,7 +162,10 @@ fn extract_filter(obj: &PdfObject<'_>) -> Vec<String> {
         Some(PdfObject::Name(n)) => vec![String::from_utf8_lossy(n).to_string()],
         Some(PdfObject::Array(arr)) => arr
             .iter()
-            .filter_map(|item| item.as_name().map(|n| String::from_utf8_lossy(n).to_string()))
+            .filter_map(|item| {
+                item.as_name()
+                    .map(|n| String::from_utf8_lossy(n).to_string())
+            })
             .collect(),
         _ => vec![],
     }
@@ -171,17 +183,16 @@ fn filter_to_ext(filters: &[String]) -> String {
     "png".to_string()
 }
 
-fn extract_image_data<'a>(
-    obj: &PdfObject<'a>,
-    filters: &[String],
-    _data: &'a [u8],
-) -> ImageData {
+fn extract_image_data<'a>(obj: &PdfObject<'a>, filters: &[String], _data: &'a [u8]) -> ImageData {
     // For JPEG/JPX, try zero-copy from mmap
     for f in filters {
         match f.as_str() {
             "DCTDecode" | "JPXDecode" => {
                 // The stream data is already in the correct format
-                if let PdfObject::Stream { data: stream_data, .. } = obj {
+                if let PdfObject::Stream {
+                    data: stream_data, ..
+                } = obj
+                {
                     // We need to find the offset of this data in the mmap
                     // For now, return as raw (the caller can use the stream data directly)
                     return ImageData::Raw(stream_data.to_vec());
@@ -194,7 +205,10 @@ fn extract_image_data<'a>(
     // For FlateDecode, decompress
     for f in filters {
         if f == "FlateDecode" {
-            if let PdfObject::Stream { data: stream_data, .. } = obj {
+            if let PdfObject::Stream {
+                data: stream_data, ..
+            } = obj
+            {
                 match decompress_flate(stream_data) {
                     Ok(decompressed) => return ImageData::Raw(decompressed),
                     Err(_) => return ImageData::Raw(stream_data.to_vec()),
@@ -204,7 +218,10 @@ fn extract_image_data<'a>(
     }
 
     // Fallback: raw stream data
-    if let PdfObject::Stream { data: stream_data, .. } = obj {
+    if let PdfObject::Stream {
+        data: stream_data, ..
+    } = obj
+    {
         ImageData::Raw(stream_data.to_vec())
     } else {
         ImageData::Raw(Vec::new())
@@ -213,13 +230,7 @@ fn extract_image_data<'a>(
 
 /// Build a minimal PNG from raw image data.
 /// This is a simplified implementation for FlateDecode images.
-pub fn encode_png(
-    width: u32,
-    height: u32,
-    bpc: u8,
-    colorspace: &str,
-    raw_data: &[u8],
-) -> Vec<u8> {
+pub fn encode_png(width: u32, height: u32, bpc: u8, colorspace: &str, raw_data: &[u8]) -> Vec<u8> {
     // Simple PNG encoding with no compression (for now)
     // In production, use zune-png for faster encoding
     let mut png = Vec::new();
@@ -261,8 +272,8 @@ fn build_ihdr(width: u32, height: u32, bpc: u8, colorspace: &str) -> Vec<u8> {
 
 fn encode_idat(raw_data: &[u8], width: u32, height: u32, bpc: u8, colorspace: &str) -> Vec<u8> {
     let bpp = match colorspace {
-        "DeviceGray" => (bpc as usize + 7) / 8,
-        _ => (bpc as usize * 3 + 7) / 8,
+        "DeviceGray" => (bpc as usize).div_ceil(8),
+        _ => (bpc as usize * 3).div_ceil(8),
     };
     let stride = width as usize * bpp;
 

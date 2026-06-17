@@ -29,7 +29,11 @@ pub fn extract_links(doc: &Document) -> ParseResult<Vec<PageLink>> {
 }
 
 /// Extract links from a single page.
-fn extract_page_links(doc: &Document, page: &PdfObject<'_>, page_num: u32) -> ParseResult<Vec<PageLink>> {
+fn extract_page_links(
+    doc: &Document,
+    page: &PdfObject<'_>,
+    page_num: u32,
+) -> ParseResult<Vec<PageLink>> {
     let mut links = Vec::new();
 
     // Get /Annots array (may be indirect reference)
@@ -138,9 +142,7 @@ mod tests {
             PdfObject::Real(300.0),
             PdfObject::Real(400.0),
         ]);
-        let annot = PdfObject::Dict(vec![
-            (b"Rect" as &[u8], rect),
-        ]);
+        let annot = PdfObject::Dict(vec![(b"Rect" as &[u8], rect)]);
         let bbox = extract_rect(&annot);
         assert_eq!(bbox, [100.0, 200.0, 300.0, 400.0]);
     }

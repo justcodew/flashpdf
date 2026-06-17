@@ -84,16 +84,20 @@ fn extract_page_batch(
         page_refs
             .par_iter()
             .map(|r| {
-                extract_single_page(doc, *r, mmap_data, options)
-                    .unwrap_or_else(|_| PageResult { blocks: vec![], images: vec![] })
+                extract_single_page(doc, *r, mmap_data, options).unwrap_or_else(|_| PageResult {
+                    blocks: vec![],
+                    images: vec![],
+                })
             })
             .collect()
     } else {
         page_refs
             .iter()
             .map(|r| {
-                extract_single_page(doc, *r, mmap_data, options)
-                    .unwrap_or_else(|_| PageResult { blocks: vec![], images: vec![] })
+                extract_single_page(doc, *r, mmap_data, options).unwrap_or_else(|_| PageResult {
+                    blocks: vec![],
+                    images: vec![],
+                })
             })
             .collect()
     }
@@ -101,11 +105,15 @@ fn extract_page_batch(
 
 /// Extract text blocks and images from multiple PDF files.
 /// Supports file-level parallelism and async prefetch.
-pub fn extract_many(paths: &[&str], options: &ExtractOptions) -> Vec<(String, ParseResult<ExtractResult>)> {
+pub fn extract_many(
+    paths: &[&str],
+    options: &ExtractOptions,
+) -> Vec<(String, ParseResult<ExtractResult>)> {
     if paths.len() <= 1 {
-        return paths.iter().map(|&path| {
-            (path.to_string(), extract(path, options))
-        }).collect();
+        return paths
+            .iter()
+            .map(|&path| (path.to_string(), extract(path, options)))
+            .collect();
     }
 
     // For small file counts, sequential + prefetch is faster than rayon
@@ -127,9 +135,7 @@ pub fn extract_many(paths: &[&str], options: &ExtractOptions) -> Vec<(String, Pa
             // Start prefetching next file in background
             let prefetch_handle = if i + 1 < paths.len() {
                 let next_path = paths[i + 1].to_string();
-                Some(std::thread::spawn(move || {
-                    Document::open(&next_path)
-                }))
+                Some(std::thread::spawn(move || Document::open(&next_path)))
             } else {
                 None
             };
@@ -274,7 +280,10 @@ fn build_xobject_map<'a>(
             _ => continue,
         };
 
-        let subtype = xobj.get(b"Subtype").and_then(|v| v.as_name()).unwrap_or(b"");
+        let subtype = xobj
+            .get(b"Subtype")
+            .and_then(|v| v.as_name())
+            .unwrap_or(b"");
 
         if subtype == b"Form" {
             // Extract Form XObject content stream
@@ -293,7 +302,9 @@ fn build_xobject_map<'a>(
                     .map(|arr| {
                         let mut m = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
                         for (i, item) in arr.iter().enumerate().take(6) {
-                            m[i] = item.as_f64().unwrap_or(if i == 0 || i == 3 { 1.0 } else { 0.0 });
+                            m[i] =
+                                item.as_f64()
+                                    .unwrap_or(if i == 0 || i == 3 { 1.0 } else { 0.0 });
                         }
                         m
                     })
@@ -319,12 +330,15 @@ fn build_xobject_map<'a>(
                     HashMap::new()
                 };
 
-                result.insert(obj_name, XObjectData::Form {
-                    data: stream_data,
-                    matrix,
-                    bbox,
-                    fonts: form_fonts,
-                });
+                result.insert(
+                    obj_name,
+                    XObjectData::Form {
+                        data: stream_data,
+                        matrix,
+                        bbox,
+                        fonts: form_fonts,
+                    },
+                );
             }
         } else {
             result.insert(obj_name, XObjectData::Image);

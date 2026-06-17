@@ -7,9 +7,9 @@ use crate::parser::xref::{
 use crate::types::{ObjectId, PdfObject};
 use memmap2::Mmap;
 use std::collections::HashMap;
-use std::sync::RwLock;
 use std::fs::File;
 use std::path::Path;
+use std::sync::RwLock;
 
 /// A parsed PDF document with zero-copy access to its objects.
 pub struct Document {
@@ -27,8 +27,8 @@ impl Document {
     /// Open and parse a PDF file.
     pub fn open<P: AsRef<Path>>(path: P) -> ParseResult<Self> {
         let file = File::open(path).map_err(|_| ParseError::Message("cannot open file"))?;
-        let mmap = unsafe { Mmap::map(&file) }
-            .map_err(|_| ParseError::Message("cannot mmap file"))?;
+        let mmap =
+            unsafe { Mmap::map(&file) }.map_err(|_| ParseError::Message("cannot mmap file"))?;
         Self::from_mmap(mmap)
     }
 
@@ -131,7 +131,10 @@ impl Document {
             }
         };
 
-        self.object_cache.write().unwrap().insert(obj_num, obj.clone());
+        self.object_cache
+            .write()
+            .unwrap()
+            .insert(obj_num, obj.clone());
         Ok(obj)
     }
 
@@ -150,7 +153,10 @@ impl Document {
         let (dict, raw_stream_data) = parse_object_stream_raw(data, offset)?;
 
         // Decompress based on /Filter
-        let filter = dict.iter().find(|(k, _)| *k == b"Filter").map(|(_, v)| v.clone());
+        let filter = dict
+            .iter()
+            .find(|(k, _)| *k == b"Filter")
+            .map(|(_, v)| v.clone());
         let stream_data: Vec<u8> = match filter {
             Some(f) => decompress_stream(raw_stream_data, &f)?,
             None => raw_stream_data.to_vec(),
@@ -168,7 +174,8 @@ impl Document {
         let objstm = parse_objstm(static_dict, leaked)?;
 
         self.objstm_cache
-            .write().unwrap()
+            .write()
+            .unwrap()
             .insert(stream_obj_num, objstm.objects);
         Ok(())
     }
@@ -229,7 +236,9 @@ fn collect_page_refs(
     refs: &mut Vec<ObjectId>,
 ) -> ParseResult<()> {
     for kid in kids {
-        let kid_ref = kid.as_ref().ok_or(ParseError::Message("Kid must be a reference"))?;
+        let kid_ref = kid
+            .as_ref()
+            .ok_or(ParseError::Message("Kid must be a reference"))?;
         let kid_obj = doc.get_object(kid_ref.num)?;
         let type_name = kid_obj
             .get(b"Type")
@@ -255,7 +264,11 @@ fn collect_page_refs(
 
 /// Parse an object at a specific byte offset in the file.
 /// Expected format: `N G obj ... endobj`
-fn parse_object_at(data: &[u8], offset: usize, _expected_gen: u16) -> ParseResult<PdfObject<'static>> {
+fn parse_object_at(
+    data: &[u8],
+    offset: usize,
+    _expected_gen: u16,
+) -> ParseResult<PdfObject<'static>> {
     if offset >= data.len() {
         return Err(ParseError::UnexpectedEof);
     }
@@ -343,7 +356,6 @@ fn resolve_indirect_object_raw<'a>(
 ) -> ParseResult<(Vec<(&'a [u8], PdfObject<'a>)>, &'a [u8])> {
     parse_object_stream_raw(data, offset)
 }
-
 
 /// Leak a PdfObject to get 'static lifetime.
 /// This is safe because the underlying mmap data lives as long as the Document.

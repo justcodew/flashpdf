@@ -193,7 +193,10 @@ fn build_spans(chars: &[CharInfo], font: &str, font_size: f64, color: u32) -> Ve
         let vert_dist = (curr.bbox[1] - prev.bbox[1]).abs();
         let horiz_gap = curr.bbox[0] - prev.bbox[2]; // gap between prev right and curr left
 
-        if vert_dist < font_size * LINE_VERT_FACTOR && horiz_gap < max_gap && horiz_gap > -font_size * 0.5 {
+        if vert_dist < font_size * LINE_VERT_FACTOR
+            && horiz_gap < max_gap
+            && horiz_gap > -font_size * 0.5
+        {
             // Same span
             current_chars.push(curr.clone());
         } else {
@@ -275,7 +278,10 @@ fn make_line(spans: Vec<TextSpan>) -> TextLine {
     let mut sorted = spans;
     sorted.sort_by(|a, b| a.bbox[0].partial_cmp(&b.bbox[0]).unwrap());
     let bbox = compute_bbox_from_spans(&sorted);
-    TextLine { bbox, spans: sorted }
+    TextLine {
+        bbox,
+        spans: sorted,
+    }
 }
 
 /// Build blocks from lines with large vertical gaps.
@@ -413,7 +419,10 @@ fn merge_two_lines(line1: &TextLine, line2: &TextLine) -> TextLine {
     merged_spans.extend(line2.spans.iter().cloned());
 
     let bbox = compute_bbox_from_spans(&merged_spans);
-    TextLine { bbox, spans: merged_spans }
+    TextLine {
+        bbox,
+        spans: merged_spans,
+    }
 }
 
 // ─── BBox helpers ───
@@ -476,7 +485,10 @@ mod tests {
     use super::*;
 
     fn make_char(c: char, x: f64, y: f64, w: f64, h: f64) -> CharInfo {
-        CharInfo { c, bbox: [x, y, x + w, y + h] }
+        CharInfo {
+            c,
+            bbox: [x, y, x + w, y + h],
+        }
     }
 
     #[test]
@@ -571,8 +583,16 @@ mod tests {
             }
         }
         // Left and right column text should not be interleaved
-        assert!(all_text.contains("Left"), "Missing left column text: {}", all_text);
-        assert!(all_text.contains("Right"), "Missing right column text: {}", all_text);
+        assert!(
+            all_text.contains("Left"),
+            "Missing left column text: {}",
+            all_text
+        );
+        assert!(
+            all_text.contains("Right"),
+            "Missing right column text: {}",
+            all_text
+        );
     }
 
     #[test]

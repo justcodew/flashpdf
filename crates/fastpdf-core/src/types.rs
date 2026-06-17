@@ -121,7 +121,10 @@ impl<'a> PdfObject<'a> {
 
     /// Look up a key in a Dict or Stream object (linear scan, dict is small).
     pub fn get(&self, key: &[u8]) -> Option<&PdfObject<'a>> {
-        self.as_dict()?.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
+        self.as_dict()?
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v)
     }
 
     pub fn is_null(&self) -> bool {

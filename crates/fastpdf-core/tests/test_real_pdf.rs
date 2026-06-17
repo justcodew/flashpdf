@@ -4,8 +4,12 @@ use std::time::Instant;
 #[test]
 fn test_extract_real_pdf() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap()
-        .join("test_data").join("2604.11578v1.pdf");
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("test_data")
+        .join("2604.11578v1.pdf");
     let path = path.to_str().unwrap();
 
     // Warm up: open and parse xref
@@ -20,23 +24,38 @@ fn test_extract_real_pdf() {
     let result = extract(path, &options).expect("Failed to extract PDF");
     let elapsed = start.elapsed();
 
-    let total_chars: usize = result.pages.iter().map(|p| {
-        p.blocks.iter().map(|b| {
-            b.lines.iter().map(|l| {
-                l.spans.iter().map(|s| s.text.len()).sum::<usize>()
-            }).sum::<usize>()
-        }).sum::<usize>()
-    }).sum();
+    let total_chars: usize = result
+        .pages
+        .iter()
+        .map(|p| {
+            p.blocks
+                .iter()
+                .map(|b| {
+                    b.lines
+                        .iter()
+                        .map(|l| l.spans.iter().map(|s| s.text.len()).sum::<usize>())
+                        .sum::<usize>()
+                })
+                .sum::<usize>()
+        })
+        .sum();
 
     let total_blocks: usize = result.pages.iter().map(|p| p.blocks.len()).sum();
-    let total_lines: usize = result.pages.iter().map(|p| {
-        p.blocks.iter().map(|b| b.lines.len()).sum::<usize>()
-    }).sum();
-    let total_spans: usize = result.pages.iter().map(|p| {
-        p.blocks.iter().map(|b| {
-            b.lines.iter().map(|l| l.spans.len()).sum::<usize>()
-        }).sum::<usize>()
-    }).sum();
+    let total_lines: usize = result
+        .pages
+        .iter()
+        .map(|p| p.blocks.iter().map(|b| b.lines.len()).sum::<usize>())
+        .sum();
+    let total_spans: usize = result
+        .pages
+        .iter()
+        .map(|p| {
+            p.blocks
+                .iter()
+                .map(|b| b.lines.iter().map(|l| l.spans.len()).sum::<usize>())
+                .sum::<usize>()
+        })
+        .sum();
 
     println!("=== fastpdf extraction results ===");
     println!("Pages:        {}", result.pages.len());
@@ -45,7 +64,10 @@ fn test_extract_real_pdf() {
     println!("Spans:        {}", total_spans);
     println!("Total chars:  {}", total_chars);
     println!("Time:         {:.2?}", elapsed);
-    println!("Speed:        {:.0} pages/sec", result.pages.len() as f64 / elapsed.as_secs_f64());
+    println!(
+        "Speed:        {:.0} pages/sec",
+        result.pages.len() as f64 / elapsed.as_secs_f64()
+    );
 
     // Print first few spans as sample
     println!("\n=== Sample text (first 5 spans) ===");
@@ -71,8 +93,12 @@ fn test_extract_real_pdf() {
 #[test]
 fn test_extract_real_pdf_parallel() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap()
-        .join("test_data").join("2604.11578v1.pdf");
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("test_data")
+        .join("2604.11578v1.pdf");
     let path = path.to_str().unwrap();
 
     let options = ExtractOptions {
@@ -89,7 +115,10 @@ fn test_extract_real_pdf_parallel() {
     println!("\n=== fastpdf parallel extraction ===");
     println!("Pages: {}", result.pages.len());
     println!("Time:  {:.2?}", elapsed);
-    println!("Speed: {:.0} pages/sec", result.pages.len() as f64 / elapsed.as_secs_f64());
+    println!(
+        "Speed: {:.0} pages/sec",
+        result.pages.len() as f64 / elapsed.as_secs_f64()
+    );
 
     assert!(result.pages.len() > 0);
 }
@@ -97,8 +126,12 @@ fn test_extract_real_pdf_parallel() {
 #[test]
 fn test_extract_real_pdf_with_images() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap()
-        .join("test_data").join("2604.11578v1.pdf");
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("test_data")
+        .join("2604.11578v1.pdf");
     let path = path.to_str().unwrap();
 
     let options = ExtractOptions {

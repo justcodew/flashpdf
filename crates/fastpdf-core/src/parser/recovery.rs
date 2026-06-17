@@ -30,7 +30,7 @@ pub fn recover_xref_by_scan(data: &[u8]) -> ParseResult<XrefTable> {
                 if let Some(obj) = try_parse_object_at(data, abs_pos) {
                     if let Some(PdfObj::Dict(d)) = Some(&obj) {
                         if is_catalog(d) {
-                            let _root_ref = find_ref_in_dict(d, b"Root").or_else(|| {
+                            let _root_ref = find_ref_in_dict(d, b"Root").or({
                                 // The catalog IS object 1 typically, and /Pages is its child
                                 // For recovery, we'll just record the first catalog-like object
                                 None
@@ -57,7 +57,9 @@ pub fn recover_xref_by_scan(data: &[u8]) -> ParseResult<XrefTable> {
             let off = entry.field1 as usize;
             if let Some(obj) = try_parse_object_at(data, off) {
                 if let PdfObj::Dict(d) = &obj {
-                    if d.iter().any(|(k, v)| *k == b"Type" && matches!(v, PdfObj::Name(n) if n == b"Catalog")) {
+                    if d.iter().any(|(k, v)| {
+                        *k == b"Type" && matches!(v, PdfObj::Name(n) if n == b"Catalog")
+                    }) {
                         root = Some(ObjectId::new(obj_num, entry.field2));
                         break;
                     }
@@ -105,7 +107,7 @@ fn try_parse_obj_header(data: &[u8], obj_keyword_pos: usize) -> Option<(u32, u16
     let gen_end = pos;
 
     // Scan backwards for the generation number
-    while pos > 0 && (b'0'..=b'9').contains(&data[pos - 1]) {
+    while pos > 0 && data[pos - 1].is_ascii_digit() {
         pos -= 1;
     }
     let gen_start = pos;
@@ -120,7 +122,7 @@ fn try_parse_obj_header(data: &[u8], obj_keyword_pos: usize) -> Option<(u32, u16
 
     // Scan backwards for the object number
     let num_end = pos;
-    while pos > 0 && (b'0'..=b'9').contains(&data[pos - 1]) {
+    while pos > 0 && data[pos - 1].is_ascii_digit() {
         pos -= 1;
     }
     let num_start = pos;
@@ -203,7 +205,9 @@ fn parse_minimal_dict(data: &[u8]) -> Option<PdfObj<'_>> {
         // Parse key (must be a name /...)
         if data[pos] != b'/' {
             // Skip unknown token
-            while pos < data.len() && !matches!(data[pos], b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/' | b'[') {
+            while pos < data.len()
+                && !matches!(data[pos], b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/' | b'[')
+            {
                 pos += 1;
             }
             continue;
@@ -211,7 +215,12 @@ fn parse_minimal_dict(data: &[u8]) -> Option<PdfObj<'_>> {
 
         let name_start = pos + 1;
         pos += 1;
-        while pos < data.len() && !matches!(data[pos], b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/' | b'[' | b'(' | b'<') {
+        while pos < data.len()
+            && !matches!(
+                data[pos],
+                b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/' | b'[' | b'(' | b'<'
+            )
+        {
             pos += 1;
         }
         let key = &data[name_start..pos];
@@ -230,14 +239,19 @@ fn parse_minimal_dict(data: &[u8]) -> Option<PdfObj<'_>> {
             // Name value
             let v_start = pos + 1;
             pos += 1;
-            while pos < data.len() && !matches!(data[pos], b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/' | b'[' | b'(' | b'<') {
+            while pos < data.len()
+                && !matches!(
+                    data[pos],
+                    b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/' | b'[' | b'(' | b'<'
+                )
+            {
                 pos += 1;
             }
             PdfObj::Name(&data[v_start..pos])
-        } else if (b'0'..=b'9').contains(&data[pos]) {
+        } else if data[pos].is_ascii_digit() {
             // Could be integer or ref: N G R
             let n_start = pos;
-            while pos < data.len() && (b'0'..=b'9').contains(&data[pos]) {
+            while pos < data.len() && data[pos].is_ascii_digit() {
                 pos += 1;
             }
             let num_str = std::str::from_utf8(&data[n_start..pos]).ok()?;
@@ -248,9 +262,9 @@ fn parse_minimal_dict(data: &[u8]) -> Option<PdfObj<'_>> {
                 pos += 1;
             }
 
-            if pos < data.len() && (b'0'..=b'9').contains(&data[pos]) {
+            if pos < data.len() && data[pos].is_ascii_digit() {
                 let g_start = pos;
-                while pos < data.len() && (b'0'..=b'9').contains(&data[pos]) {
+                while pos < data.len() && data[pos].is_ascii_digit() {
                     pos += 1;
                 }
                 let gen_str = std::str::from_utf8(&data[g_start..pos]).ok()?;
@@ -288,11 +302,12 @@ fn skip_value(data: &[u8]) {
     let _ = data;
 }
 
-fn is_catalog(dict: &[(&[u8], PdfObj<'_>)] ) -> bool {
-    dict.iter().any(|(k, v)| *k == b"Type" && matches!(v, PdfObj::Name(n) if n == b"Catalog"))
+fn is_catalog(dict: &[(&[u8], PdfObj<'_>)]) -> bool {
+    dict.iter()
+        .any(|(k, v)| *k == b"Type" && matches!(v, PdfObj::Name(n) if n == b"Catalog"))
 }
 
-fn find_ref_in_dict(dict: &[(&[u8], PdfObj<'_>)] , key: &[u8]) -> Option<ObjectId> {
+fn find_ref_in_dict(dict: &[(&[u8], PdfObj<'_>)], key: &[u8]) -> Option<ObjectId> {
     for (k, v) in dict {
         if *k == key {
             if let PdfObj::Ref(num, gen) = v {

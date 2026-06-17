@@ -25,7 +25,9 @@ impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ParseError::UnexpectedEof => write!(f, "unexpected end of input"),
-            ParseError::UnexpectedByte(b) => write!(f, "unexpected byte: 0x{:02x} ('{}')", b, *b as char),
+            ParseError::UnexpectedByte(b) => {
+                write!(f, "unexpected byte: 0x{:02x} ('{}')", b, *b as char)
+            }
             ParseError::InvalidNumber => write!(f, "invalid number format"),
             ParseError::InvalidHexString => write!(f, "invalid hex string"),
             ParseError::InvalidNameEscape => write!(f, "invalid #XX escape in name"),
@@ -49,7 +51,10 @@ fn is_whitespace(b: u8) -> bool {
 
 #[inline]
 fn is_delimiter(b: u8) -> bool {
-    matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
+    matches!(
+        b,
+        b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
+    )
 }
 
 #[inline]
@@ -168,12 +173,16 @@ pub fn parse_object<'a>(cur: &mut Cursor<'a>) -> ParseResult<PdfObject<'a>> {
     }
 }
 
-fn parse_literal<'a>(cur: &mut Cursor<'a>, expected: &[u8], obj: PdfObject<'a>) -> ParseResult<PdfObject<'a>> {
+fn parse_literal<'a>(
+    cur: &mut Cursor<'a>,
+    expected: &[u8],
+    obj: PdfObject<'a>,
+) -> ParseResult<PdfObject<'a>> {
     let remaining = cur.remaining();
     if remaining.len() >= expected.len() && &remaining[..expected.len()] == expected {
         // Check that the next char after the literal is a delimiter or whitespace
         let after = remaining.get(expected.len());
-        if after.map_or(true, |b| !is_regular(*b)) {
+        if after.is_none_or(|b| !is_regular(*b)) {
             cur.advance(expected.len());
             return Ok(obj);
         }
@@ -197,17 +206,17 @@ fn parse_number_or_ref<'a>(cur: &mut Cursor<'a>) -> ParseResult<PdfObject<'a>> {
         scan += 1;
     }
     // Skip digits
-    while scan < data.len() && (b'0'..=b'9').contains(&data[scan]) {
+    while scan < data.len() && data[scan].is_ascii_digit() {
         scan += 1;
     }
     // Check for dot
     if scan < data.len() && data[scan] == b'.' {
         // Make sure next char is digit or non-regular (so it's a real, not a ref separator)
         let next = data.get(scan + 1);
-        if next.map_or(true, |c| !is_regular(*c) || (b'0'..=b'9').contains(c)) {
+        if next.is_none_or(|c: &u8| !is_regular(*c) || c.is_ascii_digit()) {
             has_dot = true;
             scan += 1;
-            while scan < data.len() && (b'0'..=b'9').contains(&data[scan]) {
+            while scan < data.len() && data[scan].is_ascii_digit() {
                 scan += 1;
             }
         }
@@ -229,7 +238,7 @@ fn parse_number_or_ref<'a>(cur: &mut Cursor<'a>) -> ParseResult<PdfObject<'a>> {
     // Skip whitespace and check if this is a reference: N G R
     cur.skip_ws();
     if let Some(b) = cur.peek() {
-        if (b'0'..=b'9').contains(&b) || b == b'+' || b == b'-' {
+        if b.is_ascii_digit() || b == b'+' || b == b'-' {
             // Could be gen number
             let second = parse_integer_raw(cur)?;
             cur.skip_ws();
@@ -239,10 +248,7 @@ fn parse_number_or_ref<'a>(cur: &mut Cursor<'a>) -> ParseResult<PdfObject<'a>> {
                     let after_r = cur.pos() + 1;
                     if after_r >= data.len() || !is_regular(data[after_r]) {
                         cur.advance(1); // consume 'R'
-                        return Ok(PdfObject::Ref(ObjectId::new(
-                            first as u32,
-                            second as u16,
-                        )));
+                        return Ok(PdfObject::Ref(ObjectId::new(first as u32, second as u16)));
                     }
                 }
             }
@@ -272,7 +278,7 @@ fn parse_integer_raw(cur: &mut Cursor<'_>) -> ParseResult<i64> {
 
     let digits_start = cur.pos();
     while let Some(b) = cur.peek() {
-        if (b'0'..=b'9').contains(&b) {
+        if b.is_ascii_digit() {
             cur.advance(1);
         } else {
             break;
@@ -300,7 +306,7 @@ fn parse_real_raw(cur: &mut Cursor<'_>) -> ParseResult<f64> {
 
     // digits before dot
     while let Some(b) = cur.peek() {
-        if (b'0'..=b'9').contains(&b) {
+        if b.is_ascii_digit() {
             cur.advance(1);
         } else {
             break;
@@ -312,7 +318,7 @@ fn parse_real_raw(cur: &mut Cursor<'_>) -> ParseResult<f64> {
         cur.advance(1);
         // digits after dot
         while let Some(b) = cur.peek() {
-            if (b'0'..=b'9').contains(&b) {
+            if b.is_ascii_digit() {
                 cur.advance(1);
             } else {
                 break;
@@ -327,7 +333,7 @@ fn parse_real_raw(cur: &mut Cursor<'_>) -> ParseResult<f64> {
             cur.advance(1);
         }
         while let Some(b) = cur.peek() {
-            if (b'0'..=b'9').contains(&b) {
+            if b.is_ascii_digit() {
                 cur.advance(1);
             } else {
                 break;
@@ -382,7 +388,7 @@ fn parse_hex_string<'a>(cur: &mut Cursor<'a>) -> ParseResult<PdfObject<'a>> {
         }
         if is_whitespace(b) {
             cur.advance(1);
-        } else if (b'0'..=b'9').contains(&b) || (b'a'..=b'f').contains(&b) || (b'A'..=b'F').contains(&b) {
+        } else if b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || (b'A'..=b'F').contains(&b) {
             cur.advance(1);
         } else {
             return Err(ParseError::InvalidHexString);

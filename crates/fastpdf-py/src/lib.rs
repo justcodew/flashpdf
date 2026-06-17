@@ -59,9 +59,9 @@ fn extract_many<'py>(
     let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
     let results = fastpdf_core::extract_many(&path_refs, &options);
 
-    let output = PyList::empty_bound(py);
+    let output = PyList::empty(py);
     for (path, result) in results {
-        let item = PyList::empty_bound(py);
+        let item = PyList::empty(py);
         item.append(path)?;
 
         match result {
@@ -70,7 +70,7 @@ fn extract_many<'py>(
                 item.append(page_result)?;
             }
             Err(_) => {
-                item.append(PyList::empty_bound(py))?;
+                item.append(PyList::empty(py))?;
             }
         }
         output.append(item)?;
@@ -81,19 +81,16 @@ fn extract_many<'py>(
 
 /// Extract hyperlinks from a PDF file.
 #[pyfunction]
-fn extract_links<'py>(
-    py: Python<'py>,
-    path: &str,
-) -> PyResult<Bound<'py, PyList>> {
+fn extract_links<'py>(py: Python<'py>, path: &str) -> PyResult<Bound<'py, PyList>> {
     let doc = fastpdf_core::Document::open(path)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     let links = fastpdf_core::extract_links(&doc)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
-    let output = PyList::empty_bound(py);
+    let output = PyList::empty(py);
     for link in &links {
-        let dict = PyDict::new_bound(py);
+        let dict = PyDict::new(py);
         dict.set_item("uri", &link.uri)?;
         dict.set_item("bbox", link.bbox.to_vec())?;
         dict.set_item("page", link.page)?;
@@ -108,23 +105,23 @@ fn render_extract_result<'py>(
     py: Python<'py>,
     result: &fastpdf_core::ExtractResult,
 ) -> PyResult<Bound<'py, PyList>> {
-    let blocks_list = PyList::empty_bound(py);
-    let images_list = PyList::empty_bound(py);
+    let blocks_list = PyList::empty(py);
+    let images_list = PyList::empty(py);
 
     for page in &result.pages {
         for block in &page.blocks {
-            let block_dict = PyDict::new_bound(py);
+            let block_dict = PyDict::new(py);
             block_dict.set_item("type", 0)?;
             block_dict.set_item("bbox", block.bbox.to_vec())?;
 
-            let lines_list = PyList::empty_bound(py);
+            let lines_list = PyList::empty(py);
             for line in &block.lines {
-                let line_dict = PyDict::new_bound(py);
+                let line_dict = PyDict::new(py);
                 line_dict.set_item("bbox", line.bbox.to_vec())?;
 
-                let spans_list = PyList::empty_bound(py);
+                let spans_list = PyList::empty(py);
                 for span in &line.spans {
-                    let span_dict = PyDict::new_bound(py);
+                    let span_dict = PyDict::new(py);
                     span_dict.set_item("bbox", span.bbox.to_vec())?;
                     span_dict.set_item("text", &span.text)?;
                     span_dict.set_item("font", &span.font)?;
@@ -140,7 +137,7 @@ fn render_extract_result<'py>(
         }
 
         for img in &page.images {
-            let img_dict = PyDict::new_bound(py);
+            let img_dict = PyDict::new(py);
             img_dict.set_item("bbox", img.bbox.to_vec())?;
             img_dict.set_item("width", img.width)?;
             img_dict.set_item("height", img.height)?;
@@ -151,10 +148,10 @@ fn render_extract_result<'py>(
 
             match &img.data {
                 Some(fastpdf_core::ImageData::Raw(data)) => {
-                    img_dict.set_item("image", PyBytes::new_bound(py, data))?;
+                    img_dict.set_item("image", PyBytes::new(py, data))?;
                 }
                 Some(fastpdf_core::ImageData::Png(data)) => {
-                    img_dict.set_item("image", PyBytes::new_bound(py, data))?;
+                    img_dict.set_item("image", PyBytes::new(py, data))?;
                 }
                 _ => {
                     img_dict.set_item("image", py.None())?;
@@ -164,7 +161,7 @@ fn render_extract_result<'py>(
         }
     }
 
-    let result_list = PyList::empty_bound(py);
+    let result_list = PyList::empty(py);
     result_list.append(blocks_list)?;
     result_list.append(images_list)?;
     Ok(result_list)

@@ -273,7 +273,10 @@ fn test_dict_nested() {
 #[test]
 fn test_dict_get() {
     let obj = parse_object_from_bytes(b"<< /Type /Page /Count 5 >>").unwrap();
-    assert_eq!(obj.get(b"Type").unwrap().as_name(), Some(b"Page".as_slice()));
+    assert_eq!(
+        obj.get(b"Type").unwrap().as_name(),
+        Some(b"Page".as_slice())
+    );
     assert_eq!(obj.get(b"Count").unwrap().as_i64(), Some(5));
     assert!(obj.get(b"Missing").is_none());
 }
@@ -352,7 +355,10 @@ fn test_complex_structure() {
         >>\
     >>";
     let obj = parse_object_from_bytes(data).unwrap();
-    assert_eq!(obj.get(b"Type").unwrap().as_name(), Some(b"Page".as_slice()));
+    assert_eq!(
+        obj.get(b"Type").unwrap().as_name(),
+        Some(b"Page".as_slice())
+    );
     assert_eq!(obj.get(b"Parent").unwrap().as_ref().unwrap().num, 3);
     let mediabox = obj.get(b"MediaBox").unwrap().as_array().unwrap();
     assert_eq!(mediabox.len(), 4);
@@ -363,16 +369,46 @@ fn test_complex_structure() {
 
 #[test]
 fn test_type_names() {
-    assert_eq!(parse_object_from_bytes(b"42").unwrap().type_name(), "integer");
-    assert_eq!(parse_object_from_bytes(b"3.14").unwrap().type_name(), "real");
-    assert_eq!(parse_object_from_bytes(b"true").unwrap().type_name(), "boolean");
-    assert_eq!(parse_object_from_bytes(b"null").unwrap().type_name(), "null");
-    assert_eq!(parse_object_from_bytes(b"/Name").unwrap().type_name(), "name");
-    assert_eq!(parse_object_from_bytes(b"(str)").unwrap().type_name(), "string");
-    assert_eq!(parse_object_from_bytes(b"<AB>").unwrap().type_name(), "hexstring");
-    assert_eq!(parse_object_from_bytes(b"[1]").unwrap().type_name(), "array");
-    assert_eq!(parse_object_from_bytes(b"<< >>").unwrap().type_name(), "dictionary");
-    assert_eq!(parse_object_from_bytes(b"1 0 R").unwrap().type_name(), "reference");
+    assert_eq!(
+        parse_object_from_bytes(b"42").unwrap().type_name(),
+        "integer"
+    );
+    assert_eq!(
+        parse_object_from_bytes(b"3.14").unwrap().type_name(),
+        "real"
+    );
+    assert_eq!(
+        parse_object_from_bytes(b"true").unwrap().type_name(),
+        "boolean"
+    );
+    assert_eq!(
+        parse_object_from_bytes(b"null").unwrap().type_name(),
+        "null"
+    );
+    assert_eq!(
+        parse_object_from_bytes(b"/Name").unwrap().type_name(),
+        "name"
+    );
+    assert_eq!(
+        parse_object_from_bytes(b"(str)").unwrap().type_name(),
+        "string"
+    );
+    assert_eq!(
+        parse_object_from_bytes(b"<AB>").unwrap().type_name(),
+        "hexstring"
+    );
+    assert_eq!(
+        parse_object_from_bytes(b"[1]").unwrap().type_name(),
+        "array"
+    );
+    assert_eq!(
+        parse_object_from_bytes(b"<< >>").unwrap().type_name(),
+        "dictionary"
+    );
+    assert_eq!(
+        parse_object_from_bytes(b"1 0 R").unwrap().type_name(),
+        "reference"
+    );
 }
 
 // ─── Edge cases ───

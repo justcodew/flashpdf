@@ -259,7 +259,7 @@ fn extract_trailer_fields(
     Ok((root, size, info, encrypt))
 }
 
-fn extract_ref_field(dict: &[(&[u8], PdfObject<'_> )], key: &[u8]) -> ParseResult<ObjectId> {
+fn extract_ref_field(dict: &[(&[u8], PdfObject<'_>)], key: &[u8]) -> ParseResult<ObjectId> {
     for (k, v) in dict {
         if *k == key {
             if let PdfObject::Ref(id) = v {
@@ -271,10 +271,7 @@ fn extract_ref_field(dict: &[(&[u8], PdfObject<'_> )], key: &[u8]) -> ParseResul
     Err(ParseError::Message("missing required trailer field"))
 }
 
-fn extract_ref_field_opt(
-    dict: &[(&[u8], PdfObject<'_> )],
-    key: &[u8],
-) -> Option<ObjectId> {
+fn extract_ref_field_opt(dict: &[(&[u8], PdfObject<'_>)], key: &[u8]) -> Option<ObjectId> {
     for (k, v) in dict {
         if *k == key {
             if let PdfObject::Ref(id) = v {
@@ -285,7 +282,7 @@ fn extract_ref_field_opt(
     None
 }
 
-fn extract_field_u32(dict: &[(&[u8], PdfObject<'_> )], key: &[u8]) -> ParseResult<u32> {
+fn extract_field_u32(dict: &[(&[u8], PdfObject<'_>)], key: &[u8]) -> ParseResult<u32> {
     for (k, v) in dict {
         if *k == key {
             return v
@@ -297,7 +294,7 @@ fn extract_field_u32(dict: &[(&[u8], PdfObject<'_> )], key: &[u8]) -> ParseResul
     Err(ParseError::Message("missing required trailer field"))
 }
 
-fn extract_w_array(dict: &[(&[u8], PdfObject<'_> )]) -> ParseResult<[u16; 3]> {
+fn extract_w_array(dict: &[(&[u8], PdfObject<'_>)]) -> ParseResult<[u16; 3]> {
     for (k, v) in dict {
         if *k == b"W" {
             if let PdfObject::Array(arr) = v {
@@ -315,7 +312,7 @@ fn extract_w_array(dict: &[(&[u8], PdfObject<'_> )]) -> ParseResult<[u16; 3]> {
     Err(ParseError::Message("missing /W in xref stream"))
 }
 
-fn extract_index_array(dict: &[(&[u8], PdfObject<'_> )]) -> Option<Vec<(u32, u32)>> {
+fn extract_index_array(dict: &[(&[u8], PdfObject<'_>)]) -> Option<Vec<(u32, u32)>> {
     for (k, v) in dict {
         if *k == b"Index" {
             if let PdfObject::Array(arr) = v {
@@ -445,7 +442,7 @@ pub fn parse_positive_int_from_cursor(cur: &mut Cursor<'_>) -> ParseResult<i64> 
 fn parse_positive_int(cur: &mut Cursor<'_>) -> ParseResult<i64> {
     let start = cur.pos();
     while let Some(b) = cur.peek() {
-        if (b'0'..=b'9').contains(&b) {
+        if b.is_ascii_digit() {
             cur.advance(1);
         } else {
             break;
@@ -681,7 +678,7 @@ pub fn decode_run_length(data: &[u8]) -> ParseResult<Vec<u8>> {
             let byte = data[i];
             i += 1;
             let count = (1 - length as i32) as usize;
-            output.extend(std::iter::repeat(byte).take(count));
+            output.extend(std::iter::repeat_n(byte, count));
         }
     }
 
@@ -692,9 +689,7 @@ pub fn decode_run_length(data: &[u8]) -> ParseResult<Vec<u8>> {
 /// Supports single filter or array of filters (applied in order).
 pub fn decompress_stream(data: &[u8], filter: &PdfObject<'_>) -> ParseResult<Vec<u8>> {
     match filter {
-        PdfObject::Name(name) => {
-            apply_single_filter(data, name)
-        }
+        PdfObject::Name(name) => apply_single_filter(data, name),
         PdfObject::Array(filters) => {
             // Apply filters in order
             let mut current = data.to_vec();
@@ -731,7 +726,7 @@ fn decode_ascii_hex(data: &[u8]) -> ParseResult<Vec<u8>> {
             b'a'..=b'f' => nibbles.push(b - b'a' + 10),
             b'A'..=b'F' => nibbles.push(b - b'A' + 10),
             b'>' => break, // End of hex string
-            _ => {} // Ignore whitespace and other chars
+            _ => {}        // Ignore whitespace and other chars
         }
     }
 

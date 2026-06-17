@@ -1,7 +1,7 @@
+use fastpdf_core::parser::object::parse_object_from_bytes;
 use fastpdf_core::parser::xref::{
     find_startxref, is_standard_xref, parse_xref_table, XrefEntryType,
 };
-use fastpdf_core::parser::object::parse_object_from_bytes;
 use fastpdf_core::types::PdfObject;
 
 // ─── Helper: build a minimal PDF byte stream ───
@@ -23,7 +23,9 @@ fn build_minimal_pdf() -> Vec<u8> {
 
     // Object 3: Page
     let obj3_offset = pdf.len();
-    pdf.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n");
+    pdf.extend_from_slice(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n",
+    );
 
     // xref table
     let xref_offset = pdf.len();
@@ -136,7 +138,10 @@ fn test_parse_pages_object() {
     let after_header = &remaining[7..];
     let obj = parse_object_from_bytes(after_header).unwrap();
 
-    assert_eq!(obj.get(b"Type").unwrap().as_name(), Some(b"Pages".as_slice()));
+    assert_eq!(
+        obj.get(b"Type").unwrap().as_name(),
+        Some(b"Pages".as_slice())
+    );
     assert_eq!(obj.get(b"Count").unwrap().as_i64(), Some(1));
 
     let kids = obj.get(b"Kids").unwrap().as_array().unwrap();
@@ -162,7 +167,10 @@ fn test_parse_page_object() {
     let after_header = &remaining[7..];
     let obj = parse_object_from_bytes(after_header).unwrap();
 
-    assert_eq!(obj.get(b"Type").unwrap().as_name(), Some(b"Page".as_slice()));
+    assert_eq!(
+        obj.get(b"Type").unwrap().as_name(),
+        Some(b"Page".as_slice())
+    );
 
     let mediabox = obj.get(b"MediaBox").unwrap().as_array().unwrap();
     assert_eq!(mediabox.len(), 4);

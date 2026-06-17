@@ -116,7 +116,7 @@ impl FontInfo {
         // 3. Try raw byte (for Latin-1 / ASCII)
         if code.len() == 1 {
             let b = code[0];
-            if b >= 0x20 && b < 0x7F {
+            if (0x20..0x7F).contains(&b) {
                 return b as char;
             }
             // Latin-1 supplement
@@ -149,11 +149,13 @@ impl CMap {
 
         // Range lookup
         for (start, end, base) in &self.bfrange {
-            if code.len() == start.len() && code.len() == end.len() {
-                if code >= start.as_slice() && code <= end.as_slice() {
-                    let offset = code_offset(code, start);
-                    return Some(add_offset(base, offset));
-                }
+            if code.len() == start.len()
+                && code.len() == end.len()
+                && code >= start.as_slice()
+                && code <= end.as_slice()
+            {
+                let offset = code_offset(code, start);
+                return Some(add_offset(base, offset));
             }
         }
 
@@ -194,11 +196,16 @@ fn bytes_to_char(bytes: &[u8]) -> Option<char> {
     }
     // 4 bytes: could be UTF-16BE surrogate pair or direct 4-byte encoding
     if bytes.len() == 4 {
-        let code = ((bytes[0] as u32) << 24) | ((bytes[1] as u32) << 16) |
-                   ((bytes[2] as u32) << 8) | (bytes[3] as u32);
+        let code = ((bytes[0] as u32) << 24)
+            | ((bytes[1] as u32) << 16)
+            | ((bytes[2] as u32) << 8)
+            | (bytes[3] as u32);
         // Check if it's a UTF-16BE surrogate pair (0xD800..0xDBFF followed by 0xDC00..0xDFFF)
-        if (code >> 16) >= 0xD800 && (code >> 16) <= 0xDBFF &&
-           (code & 0xFFFF) >= 0xDC00 && (code & 0xFFFF) <= 0xDFFF {
+        if (code >> 16) >= 0xD800
+            && (code >> 16) <= 0xDBFF
+            && (code & 0xFFFF) >= 0xDC00
+            && (code & 0xFFFF) <= 0xDFFF
+        {
             let high = (code >> 16) - 0xD800;
             let low = (code & 0xFFFF) - 0xDC00;
             let unicode = 0x10000 + (high << 10) + low;
@@ -352,7 +359,11 @@ fn extract_differences(font_obj: &PdfObject<'_>) -> Option<HashMap<u8, Vec<u8>>>
         _ => return None,
     };
 
-    let diff_array = dict.iter().find(|(k, _)| *k == b"Differences")?.1.as_array()?;
+    let diff_array = dict
+        .iter()
+        .find(|(k, _)| *k == b"Differences")?
+        .1
+        .as_array()?;
 
     let mut result = HashMap::new();
     let mut current_code: u8 = 0;
@@ -398,7 +409,11 @@ fn extract_differences_with_resolve<'a>(
         _ => return None,
     };
 
-    let diff_array = dict.iter().find(|(k, _)| *k == b"Differences")?.1.as_array()?;
+    let diff_array = dict
+        .iter()
+        .find(|(k, _)| *k == b"Differences")?
+        .1
+        .as_array()?;
 
     let mut result = HashMap::new();
     let mut current_code: u8 = 0;
@@ -521,7 +536,10 @@ fn extract_cid_font_info(cid_obj: &PdfObject<'_>) -> CIDFontInfo {
     let dw2 = cid_obj.get(b"DW2").and_then(|v| {
         v.as_array().and_then(|arr| {
             if arr.len() >= 2 {
-                Some([arr[0].as_f64().unwrap_or(0.0), arr[1].as_f64().unwrap_or(0.0)])
+                Some([
+                    arr[0].as_f64().unwrap_or(0.0),
+                    arr[1].as_f64().unwrap_or(0.0),
+                ])
             } else {
                 None
             }
@@ -559,10 +577,15 @@ fn parse_cid_widths(cid_obj: &PdfObject<'_>) -> Vec<CIDWidthRange> {
     while i < w_array.len() {
         let c_first = match &w_array[i] {
             PdfObject::Integer(n) => *n as u32,
-            _ => { i += 1; continue; }
+            _ => {
+                i += 1;
+                continue;
+            }
         };
 
-        if i + 1 >= w_array.len() { break; }
+        if i + 1 >= w_array.len() {
+            break;
+        }
 
         // Check if next is an array (c [w1 w2 ... wn]) or integer (c_first c_last w...)
         match &w_array[i + 1] {
@@ -589,7 +612,9 @@ fn parse_cid_widths(cid_obj: &PdfObject<'_>) -> Vec<CIDWidthRange> {
                 ranges.push(CIDWidthRange { c_first, widths });
                 i += 2 + count;
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
 
