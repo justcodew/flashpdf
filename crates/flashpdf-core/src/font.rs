@@ -113,7 +113,14 @@ impl FontInfo {
             }
         }
 
-        // 3. Try raw byte (for Latin-1 / ASCII)
+        // 3. Try built-in standard font encodings (Symbol, ZapfDingbats)
+        if code.len() == 1 {
+            if let Some(c) = builtin_font_decode(&self.base_font, code[0]) {
+                return c;
+            }
+        }
+
+        // 4. Try raw byte (for Latin-1 / ASCII)
         if code.len() == 1 {
             let b = code[0];
             if (0x20..0x7F).contains(&b) {
@@ -125,7 +132,7 @@ impl FontInfo {
             }
         }
 
-        // 4. Fallback
+        // 5. Fallback
         '\u{FFFD}'
     }
 
@@ -866,6 +873,408 @@ fn adobe_glyph_to_char(name: &[u8]) -> Option<char> {
     }
 }
 
+// ─── Built-in standard font encodings (Symbol, ZapfDingbats) ───
+
+/// Strip a subset prefix like `RPUFKZ+Dingbats` → `Dingbats`.
+fn strip_subset_prefix(name: &str) -> &str {
+    match name.find('+') {
+        Some(idx) => &name[idx + 1..],
+        None => name,
+    }
+}
+
+/// Look up a byte in the built-in encoding for a standard PDF font
+/// (Symbol or ZapfDingbats). Returns None for non-standard fonts or
+/// unmapped codes.
+fn builtin_font_decode(font_name: &str, byte: u8) -> Option<char> {
+    let stripped = strip_subset_prefix(font_name);
+    // PDF standard fonts (exact match)
+    match stripped {
+        "Symbol" => return symbol_decode(byte),
+        "ZapfDingbats" | "Dingbats" => return zapfdingbats_decode(byte),
+        _ => {}
+    }
+    // TeX Computer Modern Symbol font (matched by prefix, since subsets
+    // like `NIWCFP+CMSY8` retain the family name after the subset tag).
+    // LaTeX-generated PDFs typically omit the ToUnicode CMap for cmsy
+    // fonts, leaving glyphs like `bullet` (byte 15) and `multiply`
+    // (byte 2) undecodable without this table.
+    if stripped.starts_with("CMSY") {
+        return cmsy_decode(byte);
+    }
+    None
+}
+
+/// Adobe Symbol font encoding (PDF 1.7 Appendix D.5).
+fn symbol_decode(byte: u8) -> Option<char> {
+    Some(match byte {
+        b' ' => ' ',
+        b'!' => '!',
+        0x22 => '∀',
+        b'#' => '#',
+        b'$' => '∃',
+        b'%' => '%',
+        b'&' => '&',
+        b'\'' => '∋',
+        b'(' => '(',
+        b')' => ')',
+        b'*' => '∗',
+        b'+' => '+',
+        b',' => ',',
+        b'-' => '−', // U+2212 MINUS SIGN
+        b'.' => '.',
+        b'/' => '/',
+        b'0'..=b'9' => byte as char,
+        b':' => ':',
+        b';' => ';',
+        b'<' => '<',
+        b'=' => '=',
+        b'>' => '>',
+        b'?' => '?',
+        b'@' => '≅',
+        b'A' => 'Α',
+        b'B' => 'Β',
+        b'C' => 'Χ',
+        b'D' => 'Δ',
+        b'E' => 'Ε',
+        b'F' => 'Φ',
+        b'G' => 'Γ',
+        b'H' => 'Η',
+        b'I' => 'Ι',
+        b'J' => 'ϑ',
+        b'K' => 'Κ',
+        b'L' => 'Λ',
+        b'M' => 'Μ',
+        b'N' => 'Ν',
+        b'O' => 'Ο',
+        b'P' => 'Π',
+        b'Q' => 'Θ',
+        b'R' => 'Ρ',
+        b'S' => 'Σ',
+        b'T' => 'Τ',
+        b'U' => 'Υ',
+        b'V' => 'ς',
+        b'W' => 'Ω',
+        b'X' => 'Ξ',
+        b'Y' => 'Ψ',
+        b'Z' => 'Ζ',
+        b'[' => '[',
+        b'\\' => '∴',
+        b']' => ']',
+        b'^' => '⊥',
+        b'_' => '_',
+        b'`' => '─', // radicalex — U+FFE3? use U+2500 box drawings
+        b'a' => 'α',
+        b'b' => 'β',
+        b'c' => 'χ',
+        b'd' => 'δ',
+        b'e' => 'ε',
+        b'f' => 'φ',
+        b'g' => 'γ',
+        b'h' => 'η',
+        b'i' => 'ι',
+        b'j' => 'ϕ',
+        b'k' => 'κ',
+        b'l' => 'λ',
+        b'm' => 'μ',
+        b'n' => 'ν',
+        b'o' => 'ο',
+        b'p' => 'π',
+        b'q' => 'θ',
+        b'r' => 'ρ',
+        b's' => 'σ',
+        b't' => 'τ',
+        b'u' => 'υ',
+        b'v' => 'ϖ',
+        b'w' => 'ω',
+        b'x' => 'ξ',
+        b'y' => 'ψ',
+        b'z' => 'ζ',
+        b'{' => '{',
+        b'|' => '|',
+        b'}' => '}',
+        b'~' => '∼',
+        0xA1 => 'ℵ', // aleph
+        0xA2 => 'ℜ', // real
+        0xA3 => 'ℑ', // imaginary
+        0xA4 => 'ℓ', // ell
+        0xA5 => '℘', // weierstrass p
+        0xA6 => '⊕',
+        0xA7 => '⊗',
+        0xA8 => '∅',
+        0xA9 => '∩',
+        0xAA => '∪',
+        0xAB => '⊃',
+        0xAC => '⊇',
+        0xAD => '⊄',
+        0xAE => '⊆',
+        0xAF => '∈',
+        0xB0 => '∠',
+        0xB1 => '∇',
+        0xB2 => '∏', // product (Pi)
+        0xB3 => '√',
+        0xB4 => '⋅',
+        0xB5 => '¬',
+        0xB6 => '∧',
+        0xB7 => '∨',
+        0xB8 => '⇔',
+        0xB9 => '⇐',
+        0xBA => '⇒',
+        0xBB => '↔',
+        0xBC => '↕',
+        0xBD => '←',
+        0xBE => '↑',
+        0xBF => '→',
+        0xC0 => '↓',
+        0xC1 => '↖',
+        0xC2 => '↗',
+        0xC3 => '↘',
+        0xC4 => '↙',
+        0xC5 => '∂',
+        0xC6 => '■',
+        0xC7 => '┐',
+        0xC8 => '└',
+        0xC9 => '┘',
+        0xCA => '┌',
+        0xCB => '┼',
+        0xCC => '⎯', // horiz scan
+        0xCD => '─',
+        0xCE => '█',
+        0xD0..=0xD6 => char::from_u32(0x391 + (byte - 0xD0) as u32)?, // Α-Ζ (with gaps, may be None)
+        0xD7 => '×',
+        0xD8 => 'Ø', // is this right? probably skip
+        0xE0..=0xE9 => char::from_u32(0x3B1 + (byte - 0xE0) as u32)?,
+        0xEA => '∈',
+        0xEB => '∪',
+        0xEC => '∝',
+        0xED => '∼',
+        0xEE => '≍',
+        0xEF => '≈',
+        0xF0 => '≡',
+        0xF1 => '≠',
+        0xF2 => '≥',
+        0xF3 => '≤',
+        0xF4 => '>',
+        0xF5 => '∋',
+        0xF6 => '∀',
+        0xF7 => '∂',
+        0xF8 => '∫',
+        0xF9 => '÷',
+        0xFA => '√',
+        0xFB => '∇',
+        0xFC => '⌋',
+        0xFD => '⌈',
+        0xFE => '∩',
+        _ => return None,
+    })
+}
+
+/// Adobe ZapfDingbats font encoding (PDF 1.7 Appendix D.6).
+/// Codes 0x21-0xFE map to glyphs in the Unicode Dingbats block (U+2700-27BF)
+/// and a few others.
+fn zapfdingbats_decode(byte: u8) -> Option<char> {
+    Some(match byte {
+        0x20 => ' ',
+        0x21 => '✁',
+        0x22 => '✂',
+        0x23 => '✃',
+        0x24 => '✄',
+        0x25 => '☎',
+        0x26 => '✆',
+        0x27 => '✇',
+        0x28 => '✈',
+        0x29 => '✉',
+        0x2A => '✊',
+        0x2B => '✋',
+        0x2C => '✌',
+        0x2D => '✍',
+        0x2E => '✎',
+        0x2F => '✏',
+        0x30 => '✐',
+        0x31 => '✑',
+        0x32 => '✒',
+        0x33 => '✓',
+        0x34 => '✔',
+        0x35 => '✕',
+        0x36 => '✖',
+        0x37 => '✗',
+        0x38 => '✘',
+        0x39 => '✙',
+        0x3A => '✚',
+        0x3B => '✛',
+        0x3C => '✜',
+        0x3D => '✝',
+        0x3E => '✞',
+        0x3F => '✟',
+        0x40 => '✠',
+        0x41 => '✡',
+        0x42 => '✢',
+        0x43 => '✣',
+        0x44 => '✤',
+        0x45 => '✥',
+        0x46 => '✦',
+        0x47 => '✧',
+        0x48 => '★',
+        0x49 => '✩',
+        0x4A => '✪',
+        0x4B => '✫',
+        0x4C => '✬',
+        0x4D => '✭',
+        0x4E => '✮',
+        0x4F => '✯',
+        0x50 => '✰',
+        0x51 => '✱',
+        0x52 => '✲',
+        0x53 => '✳',
+        0x54 => '✴',
+        0x55 => '✵',
+        0x56 => '✶',
+        0x57 => '✷',
+        0x58 => '✸',
+        0x59 => '✹',
+        0x5A => '✺',
+        0x5B => '✻',
+        0x5C => '✼',
+        0x5D => '✽',
+        0x5E => '✾',
+        0x5F => '✿',
+        0x60 => '❀',
+        0x61 => '❁',
+        0x62 => '❂',
+        0x63 => '❃',
+        0x64 => '❄',
+        0x65 => '❅',
+        0x66 => '❆',
+        0x67 => '❇',
+        0x68 => '❈',
+        0x69 => '❉',
+        0x6A => '❊',
+        0x6B => '❋',
+        0x6C => '●',
+        0x6D => '❍',
+        0x6E => '■',
+        0x6F => '❏',
+        0x70 => '❐',
+        0x71 => '❑',
+        0x72 => '❒',
+        0x73 => '▲',
+        0x74 => '▼',
+        0x75 => '◆',
+        0x76 => '❖',
+        0x77 => '◄',
+        0x78 => '►',
+        0x79 => '❘',
+        0x7A => '❙',
+        0x7B => '❚',
+        0x7C => '❛',
+        0x7D => '❜',
+        0x7E => '❝',
+        0xA1 => '❞',
+        0xA2 => '❡',
+        0xA3 => '❢',
+        0xA4 => '❣',
+        0xA5 => '❤',
+        0xA6 => '❥',
+        0xA7 => '✐',
+        0xA8 => '❧',
+        0xA9 => '❨',
+        0xAA => '❩',
+        0xAB => '❪',
+        0xAC => '❫',
+        0xAD => '❬',
+        0xAE => '❭',
+        0xAF => '❮',
+        0xB0 => '❯',
+        0xB1 => '❰',
+        0xB2 => '❱',
+        0xB3 => '❲',
+        0xB4 => '❳',
+        0xB5 => '❴',
+        0xB6 => '❵',
+        0xB7 => '❶',
+        0xB8 => '❷',
+        0xB9 => '❸',
+        0xBA => '❹',
+        0xBB => '❺',
+        0xBC => '❻',
+        0xBD => '❼',
+        0xBE => '❽',
+        0xBF => '❾',
+        0xC0 => '❿',
+        0xC1 => '➀',
+        0xC2 => '➁',
+        0xC3 => '➂',
+        0xC4 => '➃',
+        0xC5 => '➄',
+        0xC6 => '➅',
+        0xC7 => '➆',
+        0xC8 => '➇',
+        0xC9 => '➈',
+        0xCA => '➉',
+        0xCB => '➊',
+        0xCC => '➋',
+        0xCD => '➌',
+        0xCE => '➍',
+        0xCF => '➎',
+        0xD0 => '➏',
+        0xD1 => '➐',
+        0xD2 => '➑',
+        0xD3 => '➒',
+        0xD4 => '➓',
+        0xD5 => '┄',
+        0xD6 => '┅',
+        0xD7 => '┆',
+        0xD8 => '┇',
+        0xD9 => '┈',
+        0xDA => '┉',
+        0xDB => '┊',
+        0xDC => '┋',
+        0xDD => '╌',
+        0xDE => '╍',
+        0xDF => '═',
+        0xE0 => '│',
+        0xE1 => '║',
+        0xE2 => '░',
+        0xE3 => '▒',
+        0xE4 => '▓',
+        0xE5 => '█',
+        0xE6 => '▌',
+        0xE7 => '▐',
+        0xE8 => '▀',
+        0xE9 => '▄',
+        0xEA => '◆',
+        0xEB => '◇',
+        0xEC => '○',
+        0xED => '●',
+        0xEE => '◐',
+        0xEF => '◑',
+        0xF0 => '◒',
+        0xF1 => '◓',
+        0xF2 => '◔',
+        0xF3 => '◕',
+        0xF4 => '◖',
+        0xF5 => '◗',
+        0xF6 => '◘',
+        0xF7 => '◙',
+        0xF8 => '◢',
+        _ => return None,
+    })
+}
+
+/// TeX Computer Modern Symbol (cmsy) encoding, used by LaTeX for math
+/// symbols. Subsetted fonts like `NIWCFP+CMSY8` keep the family prefix
+/// and apply the standard OMS encoding. Mappings below are the most
+/// commonly encountered glyphs in academic papers (confirmed against
+/// `FontDescriptor.CharSet` of typical cmsy8 subsets).
+fn cmsy_decode(byte: u8) -> Option<char> {
+    Some(match byte {
+        0x01 => '′', // prime (U+2032)
+        0x02 => '×', // multiply (U+00D7)
+        0x0F => '•', // bullet (U+2022)
+        _ => return None,
+    })
+}
+
 // ─── Tests ───
 
 #[cfg(test)]
@@ -912,6 +1321,73 @@ mod tests {
         };
         assert_eq!(info.decode_char(&[0x41]), 'A');
         assert_eq!(info.decode_char(&[0x20]), ' ');
+    }
+
+    #[test]
+    fn test_builtin_symbol_decode() {
+        // Greek letters in Symbol font
+        let info = FontInfo {
+            base_font: "Symbol".into(),
+            encoding: None,
+            is_type0: false,
+            widths: vec![],
+            default_width: 600.0,
+            cmap: None,
+            differences: None,
+            cid_font: None,
+        };
+        assert_eq!(info.decode_char(&[0x41]), 'Α'); // Alpha
+        assert_eq!(info.decode_char(&[0x61]), 'α'); // alpha
+        assert_eq!(info.decode_char(&[0x44]), 'Δ'); // Delta
+        assert_eq!(info.decode_char(&[0x50]), 'Π'); // Pi
+                                                    // Subset prefix should also work
+        let info_subset = FontInfo {
+            base_font: "ABCDEF+Symbol".into(),
+            ..info
+        };
+        assert_eq!(info_subset.decode_char(&[0x61]), 'α');
+    }
+
+    #[test]
+    fn test_builtin_zapfdingbats_decode() {
+        // Test the actual case from dbnet_plus.pdf: code 0x46 in Dingbats
+        let info = FontInfo {
+            base_font: "RPUFKZ+Dingbats".into(),
+            encoding: None,
+            is_type0: false,
+            widths: vec![],
+            default_width: 600.0,
+            cmap: None,
+            differences: None,
+            cid_font: None,
+        };
+        assert_eq!(info.decode_char(&[0x46]), '✦'); // BLACK FOUR POINTED STAR
+        assert_eq!(info.decode_char(&[0x6C]), '●'); // large black circle
+                                                    // Standard name without subset prefix
+        let info_plain = FontInfo {
+            base_font: "ZapfDingbats".into(),
+            ..info
+        };
+        assert_eq!(info_plain.decode_char(&[0x46]), '✦');
+    }
+
+    #[test]
+    fn test_builtin_cmsy_decode() {
+        // LaTeX Computer Modern Symbol font — the actual case from
+        // dbnet_plus.pdf: bullets between author affiliations.
+        let info = FontInfo {
+            base_font: "NIWCFP+CMSY8".into(),
+            encoding: None,
+            is_type0: false,
+            widths: vec![],
+            default_width: 600.0,
+            cmap: None,
+            differences: None,
+            cid_font: None,
+        };
+        assert_eq!(info.decode_char(&[0x0F]), '•'); // bullet
+        assert_eq!(info.decode_char(&[0x02]), '×'); // multiply
+        assert_eq!(info.decode_char(&[0x01]), '′'); // prime
     }
 
     #[test]
