@@ -2,9 +2,10 @@
 
 ## 当前状态
 
-- **测试**: 82 个测试全部通过
-- **性能**: ~30x 速度提升 (vs PyMuPDF)
-- **精度**: 91.6% 单词重叠率
+- **版本**: 0.1.1 (PyPI 已发布)
+- **测试**: 29+ 个单元测试全部通过
+- **性能**: ~52x 速度提升 (vs PyMuPDF，15 页 PDF 文本提取 4.6ms vs 256ms)
+- **精度**: 96.9% 单词重叠率 (regex-based)
 
 ## 核心功能（影响可用性）
 
@@ -59,6 +60,12 @@
 - [x] 优化连字符 (hyphen) 处理 — 跨行连字符合并，196/196 成功合并
 - [x] 调优 TJ 字间距阈值 — 根据字体大小自适应：-150 * max(font_size/12, 0.5)
 - [x] 布局聚类参数调优 (BLOCK_GAP_FACTOR, SPAN_GAP_FACTOR) — 测试后原参数最优
+- [x] **内置字体编码支持** — Symbol、ZapfDingbats、TeX CMSY 字体在无 ToUnicode 时使用内置编码表，FFFD 字符数 152→99（v0.1.1）
+
+## 后续优化（精度提升 - 待处理）
+
+- [ ] **扩展 TeX 字体内置编码** — 添加 CMMI（math italic，希腊字母）、CMR（OT1/T1 编码）等 Computer Modern 字体系列，进一步降低 FFFD 数量
+- [ ] **WinAnsiEncoding 默认应用** — Type1/TrueType 字体未声明 Encoding 时按 WinAnsi 兜底，正确解码 bullet (•)、em-dash (—) 等
 
 ## 已知限制
 
