@@ -242,8 +242,12 @@ fn make_line(spans: Vec<TextSpan>) -> TextLine {
             let gap = curr.bbox[0] - prev.bbox[2];
             let min_size = curr.size.min(prev.size).max(1.0);
             let max_size = curr.size.max(prev.size).max(1.0);
-            // (a) MuPDF-style: positive horizontal pen movement > 0.15 em.
-            let gap_triggers = gap > min_size * 0.15;
+            // (a) MuPDF-style gap trigger, but BANDED: insert a space only when
+            // the gap is in the word-boundary range (0.15–0.6 em). Below 0.15 em
+            // chars are kerned together; above 0.6 em the gap is a tab/heading
+            // alignment, and PyMuPDF does not insert a space there (it emits
+            // "I.Introduction" for section-number tabs, not "I. Introduction").
+            let gap_triggers = gap > min_size * 0.15 && gap < min_size * 0.6;
             // (b) Size-change transition: size differs by > 25% AND prev does
             // not already end with the smaller char (so we don't separate a
             // superscript from its anchor like "Briegel" + "1").
