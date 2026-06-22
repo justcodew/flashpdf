@@ -521,9 +521,16 @@ fn xy_cut(mut blocks: Vec<TextBlock>, rect: [f64; 4]) -> Vec<TextBlock> {
         }
     }
     // 3. Fallback: sort by (y_top DESC [higher y = visually above], x_left ASC).
+    // Use bbox[3] (top edge in PDF y-up coords) rather than bbox[1] (bottom)
+    // so that tall blocks (e.g. an Abstract spanning most of the page) are
+    // ordered by where they START at the top of the page, not where their
+    // bottom ends. Otherwise short blocks above a tall block's bottom edge
+    // (e.g. an arXiv watermark at y=232 vs the Abstract's bottom at y=162)
+    // would be sorted before the tall block despite being visually below its
+    // top.
     blocks.sort_by(|a, b| {
-        b.bbox[1]
-            .partial_cmp(&a.bbox[1])
+        b.bbox[3]
+            .partial_cmp(&a.bbox[3])
             .unwrap_or(Ordering::Equal)
             .then_with(|| a.bbox[0].partial_cmp(&b.bbox[0]).unwrap_or(Ordering::Equal))
     });
