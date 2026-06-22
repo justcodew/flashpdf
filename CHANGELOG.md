@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.1.3] - 2026-06-22
+
+### Fixed
+
+- **阅读顺序（MuPDF 风格）**：v0.1.2 的 block 级 XY-cut 只把 char_sim 从 18%
+  提到 21%，根因不在列检测算法，而在 `build_lines` 入口对 spans 做了 `(y, x)`
+  预排序——这摧毁了 PDF 内容流本来正确的发射顺序。借鉴 MuPDF
+  `stext-device.c` 的在线处理思路，做了两处修改：
+
+  - `build_lines`：删除 `(y, x)` 预排序，让 spans 按 cluster_chars 输出顺序
+    （即内容流顺序）进入后续的 same-line / column-gap 判断。
+  - `build_blocks`：原 gap 检查 `curr_top - prev_bottom` 是有符号的，仅在
+    下一条 line 视觉上高于上一条时才为正（依赖旧的 y 升序预排序）。改为
+    方向无关的垂直空白公式 `max(y0_a, y0_b) - min(y1_a, y1_b)`，正确支持
+    流序中"视觉从上到下"（y 递减）的 line 序列。
+
+  前提是排版规范的 PDF（包括 arXiv 论文）在内容流里本来就按阅读顺序发射
+  text 对象，这与 MuPDF 的设计假设一致。
+
+  benchmark 影响：
+  - char_sim：21% → **66-70%**（dbnet 66.2%，arxiv_2604 70.2%）
+  - trigram Jaccard：53% → **65-68%**
+  - 性能无回归（仍 22-34x）
+
 ## [0.1.2] - 2026-06-19
 
 ### Added

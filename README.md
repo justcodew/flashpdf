@@ -210,13 +210,12 @@ PDF 文件
 | 文本 + 图像提取 | ≥ PyMuPDF 5x | **~20-34x** ✅ |
 | 字符总量 | 与 PyMuPDF 接近 | 差异 <2% |
 | 吞吐量 | — | 2000-2800 pages/sec |
-| 单词 Jaccard 重叠率 | ≥ 50% | **45-49%**（详见下方"已知限制"） |
+| char-level 顺序相似度 | ≥ 50% | **66-70%**（v0.1.3，MuPDF 风格阅读顺序） |
 
-> **已知限制**：flashpdf 在 v0.1.2 引入了 recursive XY-cut 阅读 order 排序
-> （block 级后处理），char-level 相似度从 ~18% 提升到 ~21%。剩余差距主要来自
-> 上游 `detect_columns_from_spans` 在公式密集的页面（如 arXiv 论文）上检测
-> 失败，导致单个 block 横跨双栏，block 级 XY-cut 无法修复。后续计划在 span
-> 级引入 XY-cut 或重写列检测以彻底解决。
+> **阅读顺序**：v0.1.3 借鉴 MuPDF `stext-device.c` 的处理思路，信任 PDF 内容
+> 流顺序——删除 `build_lines` 中破坏流序的 `(y, x)` 预排序，并把 `build_blocks`
+> 的 gap 检查改为方向无关。char_sim 从 v0.1.2 的 21% 提升到 66-70%，trigram
+> Jaccard 从 53% 提升到 65-68%。
 
 完整对比（性能 + 精度 + 结构）见 [性能基准报告](docs/BENCHMARK.md)。
 

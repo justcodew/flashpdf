@@ -64,7 +64,7 @@
 
 ## 后续优化（精度提升 - 待处理）
 
-- [ ] **span 级 XY-cut 列检测** — v0.1.2 的 block 级 XY-cut 只能把 char_sim 从 18% 提到 21%，瓶颈在上游 `detect_columns_from_spans`（X 投影直方图）在公式密集页面检测失败，导致单个 block 横跨双栏。计划：用递归 XY-cut 在 span 级替代直方图列检测，从根本上分离双栏
+- [x] **阅读顺序修复（MuPDF 风格）** — 之前的 char_sim 只有 21%，根因不是列检测算法，而是 `build_lines` 入口处对 spans 做了 `(y, x)` 预排序，摧毁了内容流顺序。借鉴 MuPDF `stext-device.c` 的思路（信任 PDF 内容流顺序），删除预排序，同时把 `build_blocks` 的 gap 检查从有符号改为方向无关的垂直空白公式。char_sim 从 21% 提升到 **66-70%**，trigram Jaccard 从 53% 提升到 65-68%
 - [ ] **扩展 TeX 字体内置编码** — 添加 CMMI（math italic，希腊字母）、CMR（OT1/T1 编码）等 Computer Modern 字体系列，进一步降低 FFFD 数量
 - [ ] **WinAnsiEncoding 默认应用** — Type1/TrueType 字体未声明 Encoding 时按 WinAnsi 兜底，正确解码 bullet (•)、em-dash (—) 等
 - [ ] **坐标归一化** — 部分 PDF（如 `2604.11578v1.pdf`）的文本坐标超出 MediaBox 范围（标题 x=1042 而 MediaBox 宽 595），疑似 UserUnit 或 CTM 缩放未应用。PyMuPDF 会归一化到页面坐标，flashpdf 当前原样输出

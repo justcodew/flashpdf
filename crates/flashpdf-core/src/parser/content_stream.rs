@@ -21,6 +21,8 @@ pub struct CharInfo {
     pub c: char,
     /// Bounding box: (x0, y0, x1, y1) in page coordinates
     pub bbox: [f64; 4],
+    /// Font size at emit time (per-char, from Tf operator)
+    pub size: f64,
 }
 
 /// A span of characters sharing the same font/size/color.
@@ -895,10 +897,12 @@ fn emit_string(
                 result.chars.push(CharInfo {
                     c: 'f',
                     bbox: [x, y, x + half, y + char_height],
+                    size: font_size,
                 });
                 result.chars.push(CharInfo {
                     c: 'i',
                     bbox: [x + half, y, x + char_width, y + char_height],
+                    size: font_size,
                 });
             }
             '\u{FB02}' => {
@@ -907,10 +911,12 @@ fn emit_string(
                 result.chars.push(CharInfo {
                     c: 'f',
                     bbox: [x, y, x + half, y + char_height],
+                    size: font_size,
                 });
                 result.chars.push(CharInfo {
                     c: 'l',
                     bbox: [x + half, y, x + char_width, y + char_height],
+                    size: font_size,
                 });
             }
             '\u{FB03}' => {
@@ -919,14 +925,17 @@ fn emit_string(
                 result.chars.push(CharInfo {
                     c: 'f',
                     bbox: [x, y, x + third, y + char_height],
+                    size: font_size,
                 });
                 result.chars.push(CharInfo {
                     c: 'f',
                     bbox: [x + third, y, x + third * 2.0, y + char_height],
+                    size: font_size,
                 });
                 result.chars.push(CharInfo {
                     c: 'i',
                     bbox: [x + third * 2.0, y, x + char_width, y + char_height],
+                    size: font_size,
                 });
             }
             '\u{FB04}' => {
@@ -935,14 +944,17 @@ fn emit_string(
                 result.chars.push(CharInfo {
                     c: 'f',
                     bbox: [x, y, x + third, y + char_height],
+                    size: font_size,
                 });
                 result.chars.push(CharInfo {
                     c: 'f',
                     bbox: [x + third, y, x + third * 2.0, y + char_height],
+                    size: font_size,
                 });
                 result.chars.push(CharInfo {
                     c: 'l',
                     bbox: [x + third * 2.0, y, x + char_width, y + char_height],
+                    size: font_size,
                 });
             }
             '\u{FB05}' | '\u{FB06}' => {
@@ -951,16 +963,19 @@ fn emit_string(
                 result.chars.push(CharInfo {
                     c: 's',
                     bbox: [x, y, x + half, y + char_height],
+                    size: font_size,
                 });
                 result.chars.push(CharInfo {
                     c: 't',
                     bbox: [x + half, y, x + char_width, y + char_height],
+                    size: font_size,
                 });
             }
             _ => {
                 result.chars.push(CharInfo {
                     c,
                     bbox: [x, y, x + char_width, y + char_height],
+                    size: font_size,
                 });
             }
         }
@@ -988,6 +1003,7 @@ fn emit_space(state: &TextState, result: &mut ContentResult) {
     result.chars.push(CharInfo {
         c: ' ',
         bbox: [x, y, x + w, y + state.font_size],
+        size: state.font_size,
     });
 }
 

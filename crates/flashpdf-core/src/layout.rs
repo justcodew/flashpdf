@@ -16,7 +16,9 @@ const LINE_VERT_FACTOR: f64 = 0.5;
 const BLOCK_GAP_FACTOR: f64 = 1.5;
 /// Cluster extracted characters into spans, lines, and blocks.
 ///
-/// Input: flat list of CharInfo from content stream scanning.
+/// Input: flat list of CharInfo from content stream scanning. Each CharInfo
+/// carries its own font size (from the Tf operator at emit time); the global
+/// `font_size` param is a page-level fallback used for thresholds.
 /// Output: hierarchical TextBlock → TextLine → TextSpan structure.
 pub fn cluster_chars(chars: &[CharInfo], font: &str, font_size: f64, color: u32) -> Vec<TextBlock> {
     if chars.is_empty() {
@@ -176,6 +178,8 @@ fn detect_columns_from_spans(spans: &[TextSpan]) -> Vec<Vec<TextSpan>> {
 }
 
 /// Build spans from consecutive characters with similar position.
+/// `font_size` is the page-level size used for threshold basis (matches
+/// historical behavior); per-char sizes remain available on CharInfo.
 fn build_spans(chars: &[CharInfo], font: &str, font_size: f64, color: u32) -> Vec<TextSpan> {
     if chars.is_empty() {
         return Vec::new();
@@ -212,7 +216,12 @@ fn build_spans(chars: &[CharInfo], font: &str, font_size: f64, color: u32) -> Ve
     spans
 }
 
-fn make_span(chars: SmallVec<[CharInfo; 16]>, font: &str, font_size: f64, color: u32) -> TextSpan {
+fn make_span(
+    chars: SmallVec<[CharInfo; 16]>,
+    font: &str,
+    font_size: f64,
+    color: u32,
+) -> TextSpan {
     let text: String = chars.iter().map(|c| c.c).collect();
     let bbox = compute_bbox(&chars);
     TextSpan {
@@ -232,41 +241,42 @@ fn build_lines(spans: Vec<TextSpan>, font_size: f64) -> Vec<TextLine> {
         return Vec::new();
     }
 
-    // Sort spans by vertical position (y), then by horizontal position (x)
-    let mut sorted = spans;
-    sorted.sort_by(|a, b| {
-        let ya = a.bbox[1];
-        let yb = b.bbox[1];
-        ya.partial_cmp(&yb)
-            .unwrap()
-            .then_with(|| a.bbox[0].partial_cmp(&b.bbox[0]).unwrap())
-    });
-
-    let mut lines: Vec<TextLine> = Vec::new();
-    let mut current_spans: Vec<TextSpan> = vec![sorted[0].clone()];
+    // NOTE: Do NOT pre-sort spans here.
+    // PDF content streams emit text objects in reading order for well-formed
+    // documents (title → authors → left column → right column). Pre-sorting
+    // by (y, x) destroys this order and merges spans from different columns
+    // into single blocks when detect_columns_from_spans fails. This mirrors
+    // MuPDF's approach in stext-device.c, which trusts content stream order
+    // and uses pen-delta heuristics (column-gap detection below) to split.
+    // Column gap thresholds (computed per-iteration from the running span size):
+    // - Backward jump: span starts far left of previous span end (right→left column wrap)
+    // - Forward jump: span starts far right of previous span end (left→right column)
     let line_threshold = font_size * LINE_VERT_FACTOR;
     // Column gap thresholds:
     // - Backward jump: span starts far left of previous span end (right→left column wrap)
     // - Forward jump: span starts far right of previous span end (left→right column)
     let col_gap_backward = -font_size * 10.0;
-    let col_gap_forward = font_size * 5.0; // Large forward jump = column boundary
+    let col_gap_forward = font_size * 5.0;
 
-    for i in 1..sorted.len() {
+    let mut lines: Vec<TextLine> = Vec::new();
+    let mut current_spans: Vec<TextSpan> = vec![spans[0].clone()];
+
+    for i in 1..spans.len() {
         let prev_y = current_spans.last().unwrap().bbox[1];
-        let curr_y = sorted[i].bbox[1];
-        let prev_x2 = current_spans.last().unwrap().bbox[2]; // right edge of last span
-        let curr_x = sorted[i].bbox[0]; // left edge of current span
-        let h_gap = curr_x - prev_x2; // negative = overlap/backward jump
+        let curr_y = spans[i].bbox[1];
+        let prev_x2 = current_spans.last().unwrap().bbox[2];
+        let curr_x = spans[i].bbox[0];
+        let h_gap = curr_x - prev_x2;
 
         let same_line = (curr_y - prev_y).abs() < line_threshold
             && h_gap > col_gap_backward
             && h_gap < col_gap_forward;
 
         if same_line {
-            current_spans.push(sorted[i].clone());
+            current_spans.push(spans[i].clone());
         } else {
             lines.push(make_line(current_spans));
-            current_spans = vec![sorted[i].clone()];
+            current_spans = vec![spans[i].clone()];
         }
     }
 
@@ -278,6 +288,20 @@ fn make_line(spans: Vec<TextSpan>) -> TextLine {
     // Sort spans within line by x position
     let mut sorted = spans;
     sorted.sort_by(|a, b| a.bbox[0].partial_cmp(&b.bbox[0]).unwrap());
+
+    // Insert space between adjacent spans when there's a visual gap (MuPDF
+    // SPACE_DIST heuristic). Without this, "Hello" + "World" on the same
+    // line with separate Tj operators concatenates to "HelloWorld".
+    if sorted.len() > 1 {
+        let space_threshold = sorted[0].size * 0.2;
+        for i in 1..sorted.len() {
+            let gap = sorted[i].bbox[0] - sorted[i - 1].bbox[2];
+            if gap > space_threshold && !sorted[i].text.starts_with(' ') {
+                sorted[i].text.insert(0, ' ');
+            }
+        }
+    }
+
     let bbox = compute_bbox_from_spans(&sorted);
     TextLine {
         bbox,
@@ -296,9 +320,12 @@ fn build_blocks(lines: Vec<TextLine>, font_size: f64) -> Vec<TextBlock> {
     let mut current_lines: Vec<TextLine> = vec![lines[0].clone()];
 
     for i in 1..lines.len() {
-        let prev_bottom = current_lines.last().unwrap().bbox[3];
-        let curr_top = lines[i].bbox[1];
-        let gap = curr_top - prev_bottom;
+        let prev = current_lines.last().unwrap();
+        let curr = &lines[i];
+        // Vertical whitespace between two lines (PDF y-up: bbox[3] > bbox[1]).
+        // Direction-agnostic so it works with content stream order, which emits
+        // lines top-to-bottom visually (y descending).
+        let gap = curr.bbox[1].max(prev.bbox[1]) - curr.bbox[3].min(prev.bbox[3]);
 
         if gap > block_threshold {
             blocks.push(make_block(current_lines));
@@ -565,15 +592,36 @@ struct Gap {
     gap: f64,
 }
 
-/// Project block bboxes onto `axis` (0=x, 1=y) and find the largest empty gap
+/// Trait shared by TextBlock and TextSpan so the XY-cut gap/split helpers can
+/// be generic over either granularity.
+trait BBox2D {
+    fn bbox(&self) -> [f64; 4];
+}
+
+impl BBox2D for TextBlock {
+    fn bbox(&self) -> [f64; 4] {
+        self.bbox
+    }
+}
+
+impl BBox2D for TextSpan {
+    fn bbox(&self) -> [f64; 4] {
+        self.bbox
+    }
+}
+
+/// Project item bboxes onto `axis` (0=x, 1=y) and find the largest empty gap
 /// via a sweep line over sorted intervals. Returns None if no gap exists.
-fn largest_gap(blocks: &[TextBlock], axis: usize) -> Option<Gap> {
-    if blocks.is_empty() {
+fn largest_gap<T: BBox2D>(items: &[T], axis: usize) -> Option<Gap> {
+    if items.is_empty() {
         return None;
     }
-    let mut ivs: Vec<(f64, f64)> = blocks
+    let mut ivs: Vec<(f64, f64)> = items
         .iter()
-        .map(|b| (b.bbox[axis], b.bbox[axis + 2]))
+        .map(|b| {
+            let bb = b.bbox();
+            (bb[axis], bb[axis + 2])
+        })
         .collect();
     ivs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
     let mut max_gap = 0.0;
@@ -599,22 +647,19 @@ fn largest_gap(blocks: &[TextBlock], axis: usize) -> Option<Gap> {
     }
 }
 
-/// Split blocks into two vectors by their center along `axis` relative to `pos`.
-/// Center-based (rather than bbox-overlap) so wide blocks straddling the cut
+/// Split items into two vectors by their center along `axis` relative to `pos`.
+/// Center-based (rather than bbox-overlap) so wide items straddling the cut
 /// (e.g. a full-width title over the column boundary) still get assigned
 /// deterministically to the band where most of their content sits.
-fn split_by_axis(
-    blocks: Vec<TextBlock>,
-    axis: usize,
-    pos: f64,
-) -> (Vec<TextBlock>, Vec<TextBlock>) {
+fn split_by_axis<T: BBox2D>(items: Vec<T>, axis: usize, pos: f64) -> (Vec<T>, Vec<T>) {
     let (mut lo, mut hi) = (Vec::new(), Vec::new());
-    for b in blocks {
-        let c = (b.bbox[axis] + b.bbox[axis + 2]) * 0.5;
+    for it in items {
+        let bb = it.bbox();
+        let c = (bb[axis] + bb[axis + 2]) * 0.5;
         if c < pos {
-            lo.push(b);
+            lo.push(it);
         } else {
-            hi.push(b);
+            hi.push(it);
         }
     }
     (lo, hi)
@@ -630,6 +675,7 @@ mod tests {
         CharInfo {
             c,
             bbox: [x, y, x + w, y + h],
+            size: h,
         }
     }
 
@@ -719,9 +765,11 @@ mod tests {
 
     #[test]
     fn test_two_lines() {
+        // Two chars 12px apart vertically — within normal line spacing
+        // (line height ≈ 1.2 × font_size = 14.4 at 12pt), so same block.
         let chars = vec![
             make_char('A', 100.0, 700.0, 7.0, 12.0),
-            make_char('B', 100.0, 680.0, 7.0, 12.0),
+            make_char('B', 100.0, 688.0, 7.0, 12.0),
         ];
         let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0);
         assert_eq!(blocks.len(), 1);
@@ -761,7 +809,9 @@ mod tests {
         assert_eq!(blocks[0].lines.len(), 1);
         assert_eq!(blocks[0].lines[0].spans.len(), 2);
         assert_eq!(blocks[0].lines[0].spans[0].text, "Hi");
-        assert_eq!(blocks[0].lines[0].spans[1].text, "Wo");
+        // Visual gap between "Hi" and "Wo" exceeds SPACE_DIST threshold,
+        // so make_line inserts a leading space on the second span.
+        assert_eq!(blocks[0].lines[0].spans[1].text, " Wo");
     }
 
     #[test]

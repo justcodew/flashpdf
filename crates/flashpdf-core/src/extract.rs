@@ -222,7 +222,10 @@ fn extract_single_page(
         HashMap::new()
     };
 
-    // Get primary font info for clustering
+    // Get primary font info for clustering.
+    // NOTE: font_size here is a page-level default used only as the threshold
+    // basis for layout heuristics. Per-char sizes (from Tf operators) live on
+    // CharInfo.size and are available for future per-char-aware clustering.
     let (font_name, font_size) = font_map
         .iter()
         .next()
