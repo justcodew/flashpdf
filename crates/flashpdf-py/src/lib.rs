@@ -108,10 +108,11 @@ fn render_extract_result<'py>(
     let blocks_list = PyList::empty(py);
     let images_list = PyList::empty(py);
 
-    for page in &result.pages {
+    for (page_idx, page) in result.pages.iter().enumerate() {
         for block in &page.blocks {
             let block_dict = PyDict::new(py);
             block_dict.set_item("type", 0)?;
+            block_dict.set_item("page", page_idx)?;
             block_dict.set_item("bbox", block.bbox.to_vec())?;
 
             let lines_list = PyList::empty(py);

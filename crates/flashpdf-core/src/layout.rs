@@ -154,12 +154,7 @@ fn build_spans(chars: &[CharInfo], font: &str, font_size: f64, color: u32) -> Ve
     spans
 }
 
-fn make_span(
-    chars: SmallVec<[CharInfo; 16]>,
-    font: &str,
-    font_size: f64,
-    color: u32,
-) -> TextSpan {
+fn make_span(chars: SmallVec<[CharInfo; 16]>, font: &str, font_size: f64, color: u32) -> TextSpan {
     let text: String = chars.iter().map(|c| c.c).collect();
     let bbox = compute_bbox(&chars);
     TextSpan {
@@ -253,7 +248,12 @@ fn make_line(spans: Vec<TextSpan>) -> TextLine {
             // not already end with the smaller char (so we don't separate a
             // superscript from its anchor like "Briegel" + "1").
             let size_ratio = (max_size - min_size) / max_size;
-            let prev_ends_small = prev.text.chars().last().map(|c| c.is_numeric()).unwrap_or(false);
+            let prev_ends_small = prev
+                .text
+                .chars()
+                .last()
+                .map(|c| c.is_numeric())
+                .unwrap_or(false);
             let size_triggers = size_ratio > 0.25 && !prev_ends_small;
             if gap_triggers || size_triggers {
                 sorted[i].text.insert(0, ' ');
@@ -503,7 +503,7 @@ fn xy_cut(mut blocks: Vec<TextBlock>, rect: [f64; 4]) -> Vec<TextBlock> {
     // 1. Horizontal cut: separates title band from 2-col body.
     // split_by_axis returns (center<pos, center>=pos). In PDF y-up coords the
     // higher-y half (center>=pos) is visually ABOVE → must be returned first.
-    if let Some(g) = largest_gap(&blocks, 1) {
+    if let Some(g) = largest_gap(&blocks, 1, rect) {
         if g.gap >= READING_MIN_GAP_FRAC * (rect[3] - rect[1]) {
             let (bot_blocks, top_blocks) = split_by_axis(blocks, 1, g.pos);
             let mut out = xy_cut(top_blocks, [rect[0], g.pos, rect[2], rect[3]]);
@@ -512,7 +512,7 @@ fn xy_cut(mut blocks: Vec<TextBlock>, rect: [f64; 4]) -> Vec<TextBlock> {
         }
     }
     // 2. Vertical cut: separates columns. Left column reads first.
-    if let Some(g) = largest_gap(&blocks, 0) {
+    if let Some(g) = largest_gap(&blocks, 0, rect) {
         if g.gap >= READING_MIN_GAP_FRAC * (rect[2] - rect[0]) {
             let (l, r) = split_by_axis(blocks, 0, g.pos);
             let mut out = xy_cut(l, [rect[0], rect[1], g.pos, rect[3]]);
@@ -555,17 +555,31 @@ impl BBox2D for TextSpan {
 
 /// Project item bboxes onto `axis` (0=x, 1=y) and find the largest empty gap
 /// via a sweep line over sorted intervals. Returns None if no gap exists.
-fn largest_gap<T: BBox2D>(items: &[T], axis: usize) -> Option<Gap> {
-    if items.is_empty() {
-        return None;
-    }
+///
+/// Items whose extent along `axis` exceeds 70% of the page rect's extent on
+/// that axis are excluded from the sweep: a full-width page number or a
+/// full-height sidebar bridges legitimate gaps (column gutter, title/body
+/// separation) and would otherwise hide them from the cut detection. The
+/// excluded items are still subject to the cut returned by the caller — only
+/// the GAP DETECTION ignores them.
+fn largest_gap<T: BBox2D>(items: &[T], axis: usize, rect: [f64; 4]) -> Option<Gap> {
+    let axis_extent = (rect[axis + 2] - rect[axis]).abs().max(1.0);
+    let wide_threshold = axis_extent * 0.70;
     let mut ivs: Vec<(f64, f64)> = items
         .iter()
-        .map(|b| {
+        .filter_map(|b| {
             let bb = b.bbox();
-            (bb[axis], bb[axis + 2])
+            let extent = (bb[axis + 2] - bb[axis]).abs();
+            if extent > wide_threshold {
+                None
+            } else {
+                Some((bb[axis], bb[axis + 2]))
+            }
         })
         .collect();
+    if ivs.is_empty() {
+        return None;
+    }
     ivs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
     let mut max_gap = 0.0;
     let mut max_pos = 0.0;
@@ -803,8 +817,8 @@ mod tests {
 
     #[test]
     fn test_hyphenation_merge() {
-        // Two lines in same block, with hyphen at end of first line
-        // Line 1 at y=500, Line 2 at y=515 (15px apart, > line_threshold=6, < block_threshold=18)
+        // Hyphenation merge is intentionally disabled (see merge_hyphenated_lines).
+        // Two lines with hyphen at end of first line remain separate lines.
         let chars = vec![
             make_char('c', 100.0, 500.0, 7.0, 12.0),
             make_char('o', 107.0, 500.0, 6.0, 12.0),
@@ -824,8 +838,9 @@ mod tests {
         ];
         let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0);
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].lines.len(), 1); // Merged into single line
-        let text = line_text(&blocks[0].lines[0]);
-        assert_eq!(text, "comprehensive");
+        // Hyphenation merge disabled: lines stay separate.
+        assert_eq!(blocks[0].lines.len(), 2);
+        assert_eq!(line_text(&blocks[0].lines[0]), "compre-");
+        assert_eq!(line_text(&blocks[0].lines[1]), "hensive");
     }
 }
