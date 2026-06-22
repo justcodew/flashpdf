@@ -452,7 +452,7 @@ fn compute_bbox_from_lines(lines: &[TextLine]) -> [f64; 4] {
 // ─── Reading order (recursive XY-cut) ───
 
 /// Minimum empty gap (as fraction of page dimension) required to split a band/column.
-const READING_MIN_GAP_FRAC: f64 = 0.02;
+const READING_MIN_GAP_FRAC: f64 = 0.015;
 
 /// Sort `blocks` into visual reading order using recursive XY-cut (Nagy).
 ///
