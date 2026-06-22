@@ -5,6 +5,7 @@ use crate::image::{resolve_images, ExtractedImage};
 use crate::layout::cluster_chars;
 use crate::parser::content_stream::XObjectData;
 use crate::parser::ParseResult;
+use crate::parser::TextBlock;
 use crate::types::PdfObject;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -154,6 +155,42 @@ pub fn extract_many(
     }
 }
 
+/// Resolve the page rectangle [x0, y0, x1, y1] from MediaBox, falling back
+/// to the union bbox of all text blocks if MediaBox is missing or malformed.
+fn page_rect(page: &PdfObject<'_>, blocks: &[TextBlock]) -> [f64; 4] {
+    if let Some(arr) = page.get(b"MediaBox").and_then(PdfObject::as_array) {
+        if arr.len() == 4 {
+            let mut r = [0.0; 4];
+            let mut ok = true;
+            for (i, item) in arr.iter().enumerate() {
+                match item.as_f64() {
+                    Some(v) => r[i] = v,
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                return r;
+            }
+        }
+    }
+    // Fallback: union bbox of all blocks.
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for b in blocks {
+        x0 = x0.min(b.bbox[0]);
+        y0 = y0.min(b.bbox[1]);
+        x1 = x1.max(b.bbox[2]);
+        y1 = y1.max(b.bbox[3]);
+    }
+    if x0 == f64::MAX {
+        [0.0, 0.0, 612.0, 792.0]
+    } else {
+        [x0, y0, x1, y1]
+    }
+}
+
 fn extract_single_page(
     doc: &Document,
     page_ref: crate::types::ObjectId,
@@ -202,6 +239,9 @@ fn extract_single_page(
 
     // Cluster chars into blocks
     let blocks = cluster_chars(&scan_result.chars, &font_name, font_size, 0);
+    // Sort blocks into visual reading order (recursive XY-cut)
+    let rect = page_rect(&page, &blocks);
+    let blocks = crate::layout::reading_order_sort(blocks, rect);
 
     // Resolve images if requested
     let images = if options.include_images && !scan_result.images.is_empty() {

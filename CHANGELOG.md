@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.1.2] - 2026-06-19
+
+### Added
+
+- **阅读顺序优化（recursive XY-cut）**：在 `cluster_chars` 输出的 block 列表
+  上做后处理排序，解决复杂版面（标题 + 摘要 + 双栏正文）下输出顺序与视觉
+  阅读顺序不一致的问题。
+
+  算法：递归 XY-cut（Nagy），先尝试水平切（分离标题带与正文带），再尝试
+  垂直切（分离左右栏），切不动时按 (y_top DESC, x_left ASC) 兜底排序。
+  PDF y-up 坐标系下，y 越大越靠上，先输出。
+
+  另加防御性过滤：丢弃 bbox 远超页面（如向量图形被误聚类为文字）的 block，
+  避免 XY-cut 的 gap 检测被污染。
+
+  benchmark 影响：char_sim ~18% → ~21%；trigram Jaccard 与内容覆盖基本不变。
+  改善有限的主要原因是上游 `detect_columns_from_spans` 在含大量公式的页面
+  上检测失败，导致单个 block 横跨双栏 —— XY-cut 在 block 级无法修复该问题，
+  需要后续在 span 级引入 XY-cut 或重写列检测。
+
+### Tests
+
+- 新增 3 个单元测试覆盖 XY-cut：标题 + 双栏顺序、单栏 yx 兜底、空/单元素
+
 ## [0.1.1] - 2026-06-19
 
 ### Fixed

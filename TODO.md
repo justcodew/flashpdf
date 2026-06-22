@@ -64,8 +64,10 @@
 
 ## 后续优化（精度提升 - 待处理）
 
+- [ ] **span 级 XY-cut 列检测** — v0.1.2 的 block 级 XY-cut 只能把 char_sim 从 18% 提到 21%，瓶颈在上游 `detect_columns_from_spans`（X 投影直方图）在公式密集页面检测失败，导致单个 block 横跨双栏。计划：用递归 XY-cut 在 span 级替代直方图列检测，从根本上分离双栏
 - [ ] **扩展 TeX 字体内置编码** — 添加 CMMI（math italic，希腊字母）、CMR（OT1/T1 编码）等 Computer Modern 字体系列，进一步降低 FFFD 数量
 - [ ] **WinAnsiEncoding 默认应用** — Type1/TrueType 字体未声明 Encoding 时按 WinAnsi 兜底，正确解码 bullet (•)、em-dash (—) 等
+- [ ] **坐标归一化** — 部分 PDF（如 `2604.11578v1.pdf`）的文本坐标超出 MediaBox 范围（标题 x=1042 而 MediaBox 宽 595），疑似 UserUnit 或 CTM 缩放未应用。PyMuPDF 会归一化到页面坐标，flashpdf 当前原样输出
 
 ## 已知限制
 

@@ -4,6 +4,7 @@
 /// into semantically meaningful text structures compatible with PyMuPDF output.
 use crate::parser::content_stream::{CharInfo, TextBlock, TextLine, TextSpan};
 use smallvec::SmallVec;
+use std::cmp::Ordering;
 
 // ─── Layout parameters (tunable) ───
 
@@ -478,6 +479,147 @@ fn compute_bbox_from_lines(lines: &[TextLine]) -> [f64; 4] {
     [x0, y0, x1, y1]
 }
 
+// ─── Reading order (recursive XY-cut) ───
+
+/// Minimum empty gap (as fraction of page dimension) required to split a band/column.
+const READING_MIN_GAP_FRAC: f64 = 0.02;
+
+/// Sort `blocks` into visual reading order using recursive XY-cut (Nagy).
+///
+/// First tries horizontal cuts (separate title band from 2-col body), then
+/// vertical cuts (separate left/right columns); falls back to (y_top, x_left)
+/// sort when no significant gap is found. Free function over the final block
+/// list — does not affect span/line/block clustering.
+///
+/// Coordinate convention: PDF y-up (origin at bottom-left, y grows upward),
+/// so visually-higher blocks have larger y and sort earlier.
+pub fn reading_order_sort(blocks: Vec<TextBlock>, page_rect: [f64; 4]) -> Vec<TextBlock> {
+    if blocks.len() <= 1 {
+        return blocks;
+    }
+    // Defensive filter: drop blocks whose bbox is far outside the page rect
+    // (e.g. vector graphics / Type 3 glyphs mis-clustered as text). Such
+    // blocks have coordinates in the millions and would otherwise obliterate
+    // every gap the XY-cut looks for. Allow 2x page dimension of slack on each
+    // side to tolerate minor coordinate drift / mis-scaled content.
+    let page_w = (page_rect[2] - page_rect[0]).abs().max(1.0);
+    let page_h = (page_rect[3] - page_rect[1]).abs().max(1.0);
+    let slack_x = page_w * 2.0;
+    let slack_y = page_h * 2.0;
+    let blocks: Vec<TextBlock> = blocks
+        .into_iter()
+        .filter(|b| {
+            let x0 = b.bbox[0].min(b.bbox[2]);
+            let x1 = b.bbox[0].max(b.bbox[2]);
+            let y0 = b.bbox[1].min(b.bbox[3]);
+            let y1 = b.bbox[1].max(b.bbox[3]);
+            // Reject if either edge is far outside the page rect.
+            x0 >= page_rect[0] - slack_x
+                && x1 <= page_rect[2] + slack_x
+                && y0 >= page_rect[1] - slack_y
+                && y1 <= page_rect[3] + slack_y
+        })
+        .collect();
+    if blocks.len() <= 1 {
+        return blocks;
+    }
+    xy_cut(blocks, page_rect)
+}
+
+fn xy_cut(mut blocks: Vec<TextBlock>, rect: [f64; 4]) -> Vec<TextBlock> {
+    if blocks.len() <= 1 {
+        return blocks;
+    }
+    // 1. Horizontal cut: separates title band from 2-col body.
+    // split_by_axis returns (center<pos, center>=pos). In PDF y-up coords the
+    // higher-y half (center>=pos) is visually ABOVE → must be returned first.
+    if let Some(g) = largest_gap(&blocks, 1) {
+        if g.gap >= READING_MIN_GAP_FRAC * (rect[3] - rect[1]) {
+            let (bot_blocks, top_blocks) = split_by_axis(blocks, 1, g.pos);
+            let mut out = xy_cut(top_blocks, [rect[0], g.pos, rect[2], rect[3]]);
+            out.extend(xy_cut(bot_blocks, [rect[0], rect[1], rect[2], g.pos]));
+            return out;
+        }
+    }
+    // 2. Vertical cut: separates columns. Left column reads first.
+    if let Some(g) = largest_gap(&blocks, 0) {
+        if g.gap >= READING_MIN_GAP_FRAC * (rect[2] - rect[0]) {
+            let (l, r) = split_by_axis(blocks, 0, g.pos);
+            let mut out = xy_cut(l, [rect[0], rect[1], g.pos, rect[3]]);
+            out.extend(xy_cut(r, [g.pos, rect[1], rect[2], rect[3]]));
+            return out;
+        }
+    }
+    // 3. Fallback: sort by (y_top DESC [higher y = visually above], x_left ASC).
+    blocks.sort_by(|a, b| {
+        b.bbox[1]
+            .partial_cmp(&a.bbox[1])
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| a.bbox[0].partial_cmp(&b.bbox[0]).unwrap_or(Ordering::Equal))
+    });
+    blocks
+}
+
+struct Gap {
+    pos: f64,
+    gap: f64,
+}
+
+/// Project block bboxes onto `axis` (0=x, 1=y) and find the largest empty gap
+/// via a sweep line over sorted intervals. Returns None if no gap exists.
+fn largest_gap(blocks: &[TextBlock], axis: usize) -> Option<Gap> {
+    if blocks.is_empty() {
+        return None;
+    }
+    let mut ivs: Vec<(f64, f64)> = blocks
+        .iter()
+        .map(|b| (b.bbox[axis], b.bbox[axis + 2]))
+        .collect();
+    ivs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    let mut max_gap = 0.0;
+    let mut max_pos = 0.0;
+    let mut cur_end = ivs[0].1;
+    for &(s, e) in ivs.iter().skip(1) {
+        if s > cur_end {
+            let g = s - cur_end;
+            if g > max_gap {
+                max_gap = g;
+                max_pos = cur_end + g * 0.5;
+            }
+        }
+        cur_end = cur_end.max(e);
+    }
+    if max_gap <= 0.0 {
+        None
+    } else {
+        Some(Gap {
+            pos: max_pos,
+            gap: max_gap,
+        })
+    }
+}
+
+/// Split blocks into two vectors by their center along `axis` relative to `pos`.
+/// Center-based (rather than bbox-overlap) so wide blocks straddling the cut
+/// (e.g. a full-width title over the column boundary) still get assigned
+/// deterministically to the band where most of their content sits.
+fn split_by_axis(
+    blocks: Vec<TextBlock>,
+    axis: usize,
+    pos: f64,
+) -> (Vec<TextBlock>, Vec<TextBlock>) {
+    let (mut lo, mut hi) = (Vec::new(), Vec::new());
+    for b in blocks {
+        let c = (b.bbox[axis] + b.bbox[axis + 2]) * 0.5;
+        if c < pos {
+            lo.push(b);
+        } else {
+            hi.push(b);
+        }
+    }
+    (lo, hi)
+}
+
 // ─── Tests ───
 
 #[cfg(test)]
@@ -489,6 +631,77 @@ mod tests {
             c,
             bbox: [x, y, x + w, y + h],
         }
+    }
+
+    /// Build a single-block TextBlock with one span/line containing `text`,
+    /// positioned at bbox (x0,y0,x1,y1). Used for reading-order tests.
+    fn make_block(text: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> TextBlock {
+        let span = TextSpan {
+            text: text.to_string(),
+            font: "Helvetica".to_string(),
+            size: 12.0,
+            color: 0,
+            bbox: [x0, y0, x1, y1],
+            chars: Vec::new(),
+        };
+        let line = TextLine {
+            bbox: [x0, y0, x1, y1],
+            spans: vec![span],
+        };
+        TextBlock {
+            bbox: [x0, y0, x1, y1],
+            lines: vec![line],
+        }
+    }
+
+    #[test]
+    fn test_reading_order_title_and_two_columns() {
+        // US-letter page. Title spans full width at top; two columns below.
+        let page = [0.0, 0.0, 612.0, 792.0];
+        let title = make_block("TITLE", 80.0, 740.0, 532.0, 760.0);
+        let left1 = make_block("L1", 80.0, 700.0, 290.0, 720.0);
+        let left2 = make_block("L2", 80.0, 670.0, 290.0, 690.0);
+        let right1 = make_block("R1", 322.0, 700.0, 532.0, 720.0);
+        let right2 = make_block("R2", 322.0, 670.0, 532.0, 690.0);
+
+        // Shuffle input order to prove sort actually reorders.
+        let blocks = vec![right1, left1, left2, title, right2];
+        let out = reading_order_sort(blocks, page);
+
+        fn txt(b: &TextBlock) -> &str {
+            &b.lines[0].spans[0].text
+        }
+        assert_eq!(out.len(), 5);
+        assert_eq!(txt(&out[0]), "TITLE");
+        assert_eq!(txt(&out[1]), "L1");
+        assert_eq!(txt(&out[2]), "L2");
+        assert_eq!(txt(&out[3]), "R1");
+        assert_eq!(txt(&out[4]), "R2");
+    }
+
+    #[test]
+    fn test_reading_order_single_column_falls_back_to_yx() {
+        // No significant horizontal or vertical gap → yx fallback sort.
+        // Two stacked blocks supplied out of order (bottom block first).
+        let page = [0.0, 0.0, 612.0, 792.0];
+        let top = make_block("TOP", 100.0, 700.0, 200.0, 720.0);
+        let bot = make_block("BOT", 100.0, 680.0, 200.0, 700.0);
+        let out = reading_order_sort(vec![bot.clone(), top.clone()], page);
+        // Higher y comes first in PDF coords (y grows upward here).
+        assert_eq!(&out[0].lines[0].spans[0].text, "TOP");
+        assert_eq!(&out[1].lines[0].spans[0].text, "BOT");
+    }
+
+    #[test]
+    fn test_reading_order_empty_and_single() {
+        let page = [0.0, 0.0, 612.0, 792.0];
+        let empty: Vec<TextBlock> = Vec::new();
+        assert!(reading_order_sort(empty, page).is_empty());
+
+        let single = make_block("X", 100.0, 700.0, 200.0, 720.0);
+        let out = reading_order_sort(vec![single.clone()], page);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].lines[0].spans[0].text, "X");
     }
 
     #[test]
