@@ -13,6 +13,10 @@ pub struct FontInfo {
     pub encoding: Option<String>,
     pub is_type0: bool,
     pub widths: Vec<f64>,
+    /// Char code of widths[0] (from /FirstChar). Widths array is indexed
+    /// relative to this. PDF spec: /Widths[i] is the width of char code
+    /// /FirstChar + i, in thousandths of a unit.
+    pub first_char: u32,
     pub default_width: f64,
     pub cmap: Option<CMap>,
     pub differences: Option<HashMap<u8, Vec<u8>>>,
@@ -138,12 +142,13 @@ impl FontInfo {
 
     /// Get the width of a character code in thousandths of a unit.
     pub fn char_width(&self, code: u32) -> f64 {
-        let idx = code as usize;
-        if idx < self.widths.len() {
-            self.widths[idx]
-        } else {
-            self.default_width
+        if code >= self.first_char {
+            let idx = (code - self.first_char) as usize;
+            if idx < self.widths.len() {
+                return self.widths[idx];
+            }
         }
+        self.default_width
     }
 }
 
@@ -331,12 +336,22 @@ pub fn extract_font_info(font_obj: &PdfObject<'_>) -> FontInfo {
 
     let is_type0 = subtype == b"Type0";
 
-    // Extract /Widths array
+    // Extract /Widths array. NOTE: /Widths may be an indirect reference
+    // (common in real-world PDFs). Resolution is the caller's responsibility
+    // (build_font_map). Here we handle only the inline-array case.
     let widths = font_obj
         .get(b"Widths")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|item| item.as_f64()).collect())
         .unwrap_or_default();
+
+    // /FirstChar: char code of widths[0]. Default 0 keeps historical behavior
+    // for fonts that emit a full 0..256 widths array inline.
+    let first_char = font_obj
+        .get(b"FirstChar")
+        .and_then(|v| v.as_f64())
+        .map(|v| v as u32)
+        .unwrap_or(0);
 
     let default_width = font_obj
         .get(b"DW")
@@ -351,6 +366,7 @@ pub fn extract_font_info(font_obj: &PdfObject<'_>) -> FontInfo {
         encoding,
         is_type0,
         widths,
+        first_char,
         default_width,
         cmap: None, // Populated later from ToUnicode stream
         differences,
@@ -470,6 +486,20 @@ pub fn build_font_map<'a>(
         };
 
         let mut info = extract_font_info(&font_obj);
+
+        // /Widths is commonly an indirect reference (e.g. "443 0 R") which
+        // extract_font_info cannot resolve on its own. If widths is empty
+        // but /Widths exists as a Ref, resolve it here so char_width returns
+        // real values instead of /DW (default 1000 — far too wide).
+        if info.widths.is_empty() {
+            if let Some(PdfObject::Ref(r)) = font_obj.get(b"Widths") {
+                if let Ok(w_obj) = get_object(r.num) {
+                    if let Some(arr) = w_obj.as_array() {
+                        info.widths = arr.iter().filter_map(|item| item.as_f64()).collect();
+                    }
+                }
+            }
+        }
 
         // Try to resolve encoding differences if not already extracted
         if info.differences.is_none() {
@@ -1314,6 +1344,7 @@ mod tests {
             encoding: None,
             is_type0: false,
             widths: vec![],
+            first_char: 0,
             default_width: 600.0,
             cmap: None,
             differences: None,
@@ -1331,6 +1362,7 @@ mod tests {
             encoding: None,
             is_type0: false,
             widths: vec![],
+            first_char: 0,
             default_width: 600.0,
             cmap: None,
             differences: None,
@@ -1356,6 +1388,7 @@ mod tests {
             encoding: None,
             is_type0: false,
             widths: vec![],
+            first_char: 0,
             default_width: 600.0,
             cmap: None,
             differences: None,
@@ -1380,6 +1413,7 @@ mod tests {
             encoding: None,
             is_type0: false,
             widths: vec![],
+            first_char: 0,
             default_width: 600.0,
             cmap: None,
             differences: None,
@@ -1400,6 +1434,7 @@ mod tests {
             encoding: None,
             is_type0: false,
             widths: vec![],
+            first_char: 0,
             default_width: 1000.0,
             cmap: Some(CMap {
                 bfchar,
