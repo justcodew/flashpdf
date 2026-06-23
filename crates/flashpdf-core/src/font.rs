@@ -379,42 +379,80 @@ fn find_token(s: &str, from: usize, token: &str) -> Option<usize> {
 }
 
 fn parse_bfchar_block(block: &str, map: &mut HashMap<Vec<u8>, Vec<u8>>) {
-    let tokens: Vec<&str> = block.split_whitespace().collect();
+    let tokens = extract_hex_tokens(block);
     let mut i = 0;
     while i + 1 < tokens.len() {
-        let src = parse_hex_tokens(tokens[i]);
-        let dst = parse_hex_tokens(tokens[i + 1]);
+        let src = &tokens[i];
+        let dst = &tokens[i + 1];
         if !src.is_empty() && !dst.is_empty() {
-            map.insert(src, dst);
+            map.insert(src.clone(), dst.clone());
         }
         i += 2;
     }
 }
 
 fn parse_bfrange_block(block: &str, ranges: &mut Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>) {
-    let tokens: Vec<&str> = block.split_whitespace().collect();
+    let tokens = extract_hex_tokens(block);
     let mut i = 0;
     while i + 2 < tokens.len() {
-        let start = parse_hex_tokens(tokens[i]);
-        let end = parse_hex_tokens(tokens[i + 1]);
-        let dst = parse_hex_tokens(tokens[i + 2]);
+        let start = &tokens[i];
+        let end = &tokens[i + 1];
+        let dst = &tokens[i + 2];
         if !start.is_empty() && !end.is_empty() && !dst.is_empty() {
-            ranges.push((start, end, dst));
+            ranges.push((start.clone(), end.clone(), dst.clone()));
         }
         i += 3;
     }
 }
 
-fn parse_hex_tokens(s: &str) -> Vec<u8> {
-    let s = s.trim_start_matches('<').trim_end_matches('>');
+/// Extract all `<hex>` tokens from a CMap block, returning their byte values.
+///
+/// Handles both space-separated (`<21> <21> <0041>`) and concatenated
+/// (`<21><21><0041>`) forms. Also strips bfrange array syntax like
+/// `[<0041><0042>]` by flattening brackets.
+fn extract_hex_tokens(s: &str) -> Vec<Vec<u8>> {
+    let mut tokens = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() && bytes[j] != b'>' {
+                j += 1;
+            }
+            if j < bytes.len() {
+                // Parse hex between < and >
+                let hex = &s[start..j];
+                let parsed = parse_hex_bytes(hex);
+                if !parsed.is_empty() {
+                    tokens.push(parsed);
+                }
+                i = j + 1;
+            } else {
+                break;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    tokens
+}
+
+fn parse_hex_bytes(hex: &str) -> Vec<u8> {
     let mut result = Vec::new();
-    let chars: Vec<char> = s.chars().collect();
+    let chars: Vec<char> = hex.chars().filter(|c| !c.is_whitespace()).collect();
     let mut i = 0;
     while i + 1 < chars.len() {
         let hi = hex_char_val(chars[i]);
         let lo = hex_char_val(chars[i + 1]);
         result.push((hi << 4) | lo);
         i += 2;
+    }
+    // Odd trailing nibble
+    if i < chars.len() {
+        let hi = hex_char_val(chars[i]);
+        result.push(hi << 4);
     }
     result
 }
