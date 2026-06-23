@@ -240,6 +240,20 @@ PDF 文件
 
 完整对比（性能 + 精度 + 结构）见 [性能基准报告](docs/BENCHMARK.md)。
 
+### 与 pdf_oxide 的正面对比
+
+在两个真实 arxiv 学术 PDF（14-15 页，含 LaTeX 数学公式）上，flashpdf v0.1.3
+对比 pdf_oxide 0.3.67（自称 "0.8ms mean"）：
+
+| 文件 | flashpdf (MT) | pdf_oxide | PyMuPDF | flashpdf 加速比 |
+|------|--------------:|----------:|--------:|-----------------:|
+| dbnet_plus (15p) | **4.90ms** | 58.17ms | 258.37ms | **11.9x** vs pdf_oxide / **52.7x** vs PyMuPDF |
+| arxiv_2604 (14p) | **8.63ms** | 78.05ms | 140.76ms | **9.0x** vs pdf_oxide / **16.3x** vs PyMuPDF |
+
+> 注：pdf_oxide README 的 "0.8ms mean" 来自 3,830 个小型 1-2 页 PDF 语料库
+> （veraPDF + Mozilla pdf.js + SafeDocs）的平均值。本测试用真实学术论文，
+> 比语料库平均负载重 10-20 倍。详见 [基准报告](docs/BENCHMARK.md)。
+
 ## 测试
 
 ```bash
