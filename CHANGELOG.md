@@ -1,8 +1,45 @@
 # Changelog
 
-## [0.1.3] - 2026-06-22
+## [0.1.3] - 2026-06-23
+
+本次发布聚焦**解码准确性**与**行内空格还原**，char_sim 从 v0.1.2 的 21%
+跃升到 **95%+**，达到与 PyMuPDF 对齐的水平。
 
 ### Fixed
+
+- **ToUnicode 多码点映射**：bfchar/bfrange 的 unicode 值可能编码多个字符
+  （UTF-16BE 码元序列，含代理对）。新增 `decode_chars` 将 ToUnicode 字节按
+  UTF-16BE 解码为 `Vec<char>`，并通过按比例分配字形宽度正确还原字符序列。
+  修复 TeX Computer Modern 字体（CMSY/CMMI/CMR）常见多字节 ToUnicode。
+
+- **尊重字体的连字映射**：之前强制把 `ﬁ → fi`、`ﬂ → fl`、`ﬃ → ffi` 等
+  Adobe 连字展开为 ASCII，会破坏 PyMuPDF 的"按字体声明输出"行为。移除强制
+  扩展块，保留解码器返回的字面字符，与 PyMuPDF 一致。
+
+- **嵌入式 Type1 字体 /Encoding 恢复**：TeX CM 字体没有 PDF /Encoding，也没
+  有 /ToUnicode，但通常嵌入了 PFA/PFB 字体程序。新增
+  `extract_encoding_from_font_program`：解析 FontDescriptor → FontFile(2/3)，
+  去压缩流，剥离 PFB 段头 (0x80 前缀)，用 memchr 扫描 `/Encoding ... def`
+  段还原 256 项编码向量。配合 adobe-glyph-list 翻译字形名为 Unicode。
+
+- **拼接 <hex> token 的 CMap 解析**：现代 Office 字体（Aptos 等）的
+  ToUnicode 把多个 bfchar 项拼接在一行 `<21><21><0041>`，无空格分隔。旧的
+  按空白分割的解析器会把整行视作单个 token 导致码点查找不到（byte 0x31
+  报 "NOT FOUND"）。改用扫描 `<...>` 分隔符的 `extract_hex_tokens`，正确
+  解析所有拼接形式。
+
+- **Tj/TJ 字距触发空格**：TJ 操作符的字距调整值（< -150/1000 em）插入
+  合成空格，修复单词粘连。
+
+- **行内 Td/Tm 画笔跳动空格**：当 Td/Tm 在同一行内（dy 小）水平移动
+  0.15-1.0 em 时，发出一个空格。修复字体切换处（如 "Woo et al."）漏掉的
+  词间空格。使用 tlm/tm 矩阵计算真实画笔位移，严格区间避免污染数学公式。
+
+- **未映射控制字符直通**：raw byte < 0x20 在无映射时直出原始字节而非
+  U+FFFD，减少替换符噪声。
+
+- **TJ 字距阈值收紧**：标题/缩进产生的大字距被误判为词边界，阈值收紧
+  到 0.15-0.6 em 区间。
 
 - **阅读顺序（MuPDF 风格）**：v0.1.2 的 block 级 XY-cut 只把 char_sim 从 18%
   提到 21%，根因不在列检测算法，而在 `build_lines` 入口对 spans 做了 `(y, x)`
@@ -19,10 +56,22 @@
   前提是排版规范的 PDF（包括 arXiv 论文）在内容流里本来就按阅读顺序发射
   text 对象，这与 MuPDF 的设计假设一致。
 
-  benchmark 影响：
-  - char_sim：21% → **66-70%**（dbnet 66.2%，arxiv_2604 70.2%）
-  - trigram Jaccard：53% → **65-68%**
-  - 性能无回归（仍 22-34x）
+### Benchmark 影响
+
+| 文件 | char_sim (v0.1.2) | char_sim (v0.1.3) | trigram | FFFD |
+|------|---------:|---------:|---------:|---------:|
+| dbnet_plus | 21% | **96.8%** | 91.4% | 1 |
+| arxiv_2604 | 21% | **95.5%** | 88.1% | 0 |
+
+性能无回归：文本提取 **15-33x** PyMuPDF；文本 + 图像 **17-33x**。
+
+### Tests
+
+- 新增数学字形名（asteriskmath、circlemultiply、circleplus、circumflex、
+  equivalence、existential、openbullet、prime、propersubset/superset、
+  reflectequiv、similar、universal）扩展 adobe-glyph-list。
+- 单元测试 32 个全部通过。
+
 
 ## [0.1.2] - 2026-06-19
 

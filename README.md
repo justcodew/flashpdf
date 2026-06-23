@@ -204,18 +204,19 @@ PDF 文件
 
 ## 性能目标
 
-| 场景 | 目标 | 实际 (v0.1.1) |
+| 场景 | 目标 | 实际 (v0.1.3) |
 |------|------|------|
-| 文本提取 | ≥ PyMuPDF 2x | **~20-50x** (视 PDF 复杂度) |
-| 文本 + 图像提取 | ≥ PyMuPDF 5x | **~20-34x** ✅ |
+| 文本提取 | ≥ PyMuPDF 2x | **~15-33x** (视 PDF 复杂度) |
+| 文本 + 图像提取 | ≥ PyMuPDF 5x | **~17-33x** ✅ |
 | 字符总量 | 与 PyMuPDF 接近 | 差异 <2% |
-| 吞吐量 | — | 2000-2800 pages/sec |
-| char-level 顺序相似度 | ≥ 50% | **66-70%**（v0.1.3，MuPDF 风格阅读顺序） |
+| 吞吐量 | — | 1500-2800 pages/sec |
+| char-level 顺序相似度 | ≥ 90% | **95-97%** ✅（v0.1.3，与 PyMuPDF 对齐） |
 
-> **阅读顺序**：v0.1.3 借鉴 MuPDF `stext-device.c` 的处理思路，信任 PDF 内容
-> 流顺序——删除 `build_lines` 中破坏流序的 `(y, x)` 预排序，并把 `build_blocks`
-> 的 gap 检查改为方向无关。char_sim 从 v0.1.2 的 21% 提升到 66-70%，trigram
-> Jaccard 从 53% 提升到 65-68%。
+> **解码准确性**：v0.1.3 修复了 TeX Computer Modern 字体的多码点 ToUnicode
+> 映射、嵌入式 Type1 字体程序的 /Encoding 恢复、行内 Td/Tm 画笔跳动的空格
+> 补全。char_sim 从 v0.1.2 的 21% 跃升到 **95%+**，与 PyMuPDF 对齐。
+> dbnet_plus 95.5%→96.8%，arxiv_2604 70.2%→95.5%；FFFD 替换符从 99+40
+> 降到 1+0。
 
 完整对比（性能 + 精度 + 结构）见 [性能基准报告](docs/BENCHMARK.md)。
 
@@ -232,12 +233,10 @@ cargo test -p flashpdf-core test_cmap
 cargo bench -p flashpdf-core
 ```
 
-当前测试：**85 个测试全部通过** ✅
+当前测试：**32 个核心单元测试全部通过** ✅（lib 内）+ 集成测试通过
 
-- 对象解析器：45 个测试
-- xref + trailer：11 个测试
-- 内容流 + 布局 + 字体 + recovery：26 个测试
-- 流解码器 (LZW/ASCII85/RunLength/ASCIIHex)：3 个测试
+- lib 单元测试：32 个（对象解析、xref、内容流、布局、字体、recovery）
+- 流解码器 (LZW/ASCII85/RunLength/ASCIIHex)：集成覆盖
 
 ## 依赖
 

@@ -86,7 +86,7 @@ fn test_extract_real_pdf() {
     }
 
     // Basic sanity checks
-    assert!(result.pages.len() > 0, "Should have at least 1 page");
+    assert!(!result.pages.is_empty(), "Should have at least 1 page");
     assert!(total_chars > 0, "Should have extracted some text");
 }
 
@@ -120,7 +120,7 @@ fn test_extract_real_pdf_parallel() {
         result.pages.len() as f64 / elapsed.as_secs_f64()
     );
 
-    assert!(result.pages.len() > 0);
+    assert!(!result.pages.is_empty());
 }
 
 #[test]

@@ -37,9 +37,9 @@ fn test_integer_with_trailing_ws() {
 
 #[test]
 fn test_real_simple() {
-    let obj = parse_object_from_bytes(b"3.14").unwrap();
+    let obj = parse_object_from_bytes(b"3.5").unwrap();
     let f = obj.as_f64().unwrap();
-    assert!((f - 3.14).abs() < 1e-10);
+    assert!((f - 3.5).abs() < 1e-10);
 }
 
 #[test]
