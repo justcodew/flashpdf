@@ -178,6 +178,38 @@ for page in &result.pages {
 
 **返回值：** `[(path, blocks, images), ...]`
 
+### 多线程 vs 单线程：`page_parallel` 怎么选
+
+flashpdf 通过 `page_parallel` 开关在两种并行策略间切换：
+
+| 模式 | `page_parallel` | 内部行为 | 适用场景 |
+|------|-----------------|----------|----------|
+| **MT** (Multi-Thread) | `True` | rayon 把 PDF 各**页**分发到多核并行处理 | 单文件提取（默认推荐） |
+| **ST** (Single-Thread) | `False` | 顺序处理每一页 | 单核机器，或与 `extract_many` 的 `file_parallel` 配合 |
+
+实测在 14-15 页的学术论文上，MT 比 ST 快 **3-4x**（dbnet_plus 4.93ms vs 13.80ms，
+arxiv_2604 8.44ms vs 34.62ms），收益随 CPU 核数和页数线性增长。
+
+**什么时候用哪个**：
+
+```python
+# 单文件提取：直接用默认 MT，多核白嫖
+blocks, imgs = flashpdf.extract("a.pdf")
+
+# 批量处理多文件：file_parallel + ST per file 更优
+# 文件级并行比页级并行更粗粒度，调度开销更低，避免 rayon 嵌套
+for path, blocks, imgs in flashpdf.extract_many(
+    ["a.pdf", "b.pdf", "c.pdf"],
+    file_parallel=True,
+    page_parallel=False,
+):
+    ...
+```
+
+> **基准报告里的 MT / ST 是什么**：所有对比库（pdf_oxide / PyMuPDF / pypdfium2 等）
+> 都是单线程跑的，所以 **flashpdf-ST 才是 apples-to-apples 的对比**（仍然比所有
+> 其他库快 2-8x），MT 是 flashpdf 额外的多核加成。
+
 ## 架构
 
 详见 [API 文档](docs/API.md) 获取完整的 API 参考。设计文档见 [DESIGN_V1](docs/DESIGN_V1.md) 和 [DESIGN_V2](docs/DESIGN_V2.md)。
