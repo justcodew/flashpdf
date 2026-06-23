@@ -591,6 +591,10 @@ fn execute_operator_full(
             if operands.len() >= 2 {
                 let tx = operands[operands.len() - 2].as_f64();
                 let ty = operands[operands.len() - 1].as_f64();
+                // Actual pen displacement from current position to new position
+                let dx = state.tlm.e + tx - state.tm.e;
+                let dy = state.tlm.f + ty - state.tm.f;
+                maybe_emit_space_for_move(state, result, dx, dy, state.font_size);
                 let m = Matrix::new(1.0, 0.0, 0.0, 1.0, tx, ty);
                 state.tlm = m.mul(&state.tlm);
                 state.tm = state.tlm;
@@ -600,6 +604,9 @@ fn execute_operator_full(
             if operands.len() >= 2 {
                 let tx = operands[operands.len() - 2].as_f64();
                 let ty = operands[operands.len() - 1].as_f64();
+                let dx = state.tlm.e + tx - state.tm.e;
+                let dy = state.tlm.f + ty - state.tm.f;
+                maybe_emit_space_for_move(state, result, dx, dy, state.font_size);
                 state.leading = -ty;
                 let m = Matrix::new(1.0, 0.0, 0.0, 1.0, tx, ty);
                 state.tlm = m.mul(&state.tlm);
@@ -614,7 +621,11 @@ fn execute_operator_full(
                 let d = operands[operands.len() - 3].as_f64();
                 let e = operands[operands.len() - 2].as_f64();
                 let f = operands[operands.len() - 1].as_f64();
-                state.tlm = Matrix::new(a, b_, c, d, e, f);
+                let new_tm = Matrix::new(a, b_, c, d, e, f);
+                let dx = new_tm.e - state.tm.e;
+                let dy = new_tm.f - state.tm.f;
+                maybe_emit_space_for_move(state, result, dx, dy, state.font_size);
+                state.tlm = new_tm;
                 state.tm = state.tlm;
             }
         }
@@ -938,6 +949,46 @@ fn emit_space(state: &TextState, result: &mut ContentResult) {
         bbox: [x, y, x + w, y + state.font_size],
         size: state.font_size,
     });
+}
+
+/// Insert a space when a text-positioning operator (Td/TD/Tm) moves the pen
+/// horizontally on the same line by a word-space-sized gap.
+///
+/// PyMuPDF inserts a space at these intra-line pen jumps (common when
+/// switching fonts mid-sentence, e.g. an italic "et al." after a regular-font
+/// author name). The tight 0.15–1.0em band excludes both tiny pen adjustments
+/// (same-word continuation, hyphenation) and large math-formula repositioning.
+///
+/// `dx`/`dy` are the displacement in text-space units (points). `font_size`
+/// is the current font size for em conversion.
+fn maybe_emit_space_for_move(
+    state: &TextState,
+    result: &mut ContentResult,
+    dx: f64,
+    dy: f64,
+    font_size: f64,
+) {
+    if font_size <= 0.0 {
+        return;
+    }
+    // Must be on the same line (small vertical drift only)
+    if dy.abs() > font_size * 0.3 {
+        return;
+    }
+    let dx_em = dx / font_size;
+    // Tight band: word-space sized only
+    if !(0.15..=1.0).contains(&dx_em) {
+        return;
+    }
+    // Don't emit if the last char is already whitespace or nothing was drawn
+    let last = match result.chars.last() {
+        Some(c) => c,
+        None => return,
+    };
+    if last.c.is_whitespace() {
+        return;
+    }
+    emit_space(state, result);
 }
 
 // ─── Tests ───
