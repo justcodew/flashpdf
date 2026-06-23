@@ -575,6 +575,121 @@ fn extract_differences_with_resolve<'a>(
     }
 }
 
+/// Parse the /Encoding vector from an embedded Type1 font program (PFA/PFB).
+///
+/// Returns a byte → glyph-name map. Used for TeX CM fonts that have no PDF
+/// /Encoding and no /ToUnicode, leaving the glyph→Unicode mapping recoverable
+/// only via the font program itself.
+fn extract_encoding_from_font_program<'a>(
+    font_obj: &PdfObject<'a>,
+    get_object: &impl Fn(u32) -> ParseResult<PdfObject<'a>>,
+) -> Option<HashMap<u8, Vec<u8>>> {
+    // Resolve FontDescriptor → FontFile / FontFile2 / FontFile3
+    let fd_ref = match font_obj.get(b"FontDescriptor")? {
+        PdfObject::Ref(r) => r,
+        _ => return None,
+    };
+    let fd = get_object(fd_ref.num).ok()?;
+    let ff_ref = fd
+        .get(b"FontFile")
+        .or_else(|| fd.get(b"FontFile2"))
+        .or_else(|| fd.get(b"FontFile3"))?;
+    let ff_ref = match ff_ref {
+        PdfObject::Ref(r) => r,
+        _ => return None,
+    };
+    let ff_obj = get_object(ff_ref.num).ok()?;
+    let (data, dict) = match &ff_obj {
+        PdfObject::Stream { data, dict } => (data, dict),
+        _ => return None,
+    };
+    let filter = dict.iter().find(|(k, _)| *k == b"Filter").map(|(_, v)| v);
+    let raw = match filter {
+        Some(f) => {
+            crate::parser::xref::decompress_stream(data, f).unwrap_or_else(|_| data.to_vec())
+        }
+        None => data.to_vec(),
+    };
+
+    // PFB has a binary header (0x80 <type> <len-lo> <len-hi> per section).
+    // PFA is plain ASCII. Detect PFB and strip headers to get ASCII text.
+    let text = if raw.starts_with(&[0x80]) {
+        strip_pfb_header(&raw)
+    } else {
+        String::from_utf8_lossy(&raw).to_string()
+    };
+
+    parse_type1_encoding(&text)
+}
+
+/// Strip PFB binary section headers, concatenating the ASCII payload.
+fn strip_pfb_header(raw: &[u8]) -> String {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 3 < raw.len() {
+        if raw[i] != 0x80 {
+            break;
+        }
+        let _seg_type = raw[i + 1];
+        let len = (raw[i + 2] as usize) | ((raw[i + 3] as usize) << 8);
+        i += 4;
+        let end = (i + len).min(raw.len());
+        out.extend_from_slice(&raw[i..end]);
+        i = end;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// Extract `dup <pos> /<glyphname> put` entries from a Type1 font program.
+fn parse_type1_encoding(text: &str) -> Option<HashMap<u8, Vec<u8>>> {
+    let bytes = text.as_bytes();
+    let mut result = HashMap::new();
+    let needle = b"dup ";
+    let mut i = 0;
+    while let Some(rel) = memchr::memmem::find(&bytes[i..], needle) {
+        i += rel + needle.len();
+        // Skip whitespace
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        // Parse decimal number
+        let start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == start {
+            continue;
+        }
+        let pos_str = &text[start..i];
+        let Ok(pos) = pos_str.parse::<u8>() else {
+            continue;
+        };
+        // Skip whitespace
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        // Expect '/'
+        if i >= bytes.len() || bytes[i] != b'/' {
+            continue;
+        }
+        i += 1;
+        let name_start = i;
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'/' {
+            i += 1;
+        }
+        let name = &text[name_start..i];
+        if name == ".notdef" {
+            continue;
+        }
+        result.insert(pos, name.as_bytes().to_vec());
+    }
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
+}
+
 /// Build a complete font map from a page's /Resources /Font dictionary.
 pub fn build_font_map<'a>(
     resources: &PdfObject<'a>,
@@ -618,6 +733,16 @@ pub fn build_font_map<'a>(
         // Try to resolve encoding differences if not already extracted
         if info.differences.is_none() {
             info.differences = extract_differences_with_resolve(&font_obj, &get_object);
+        }
+
+        // Last resort: parse the embedded Type1 font program's /Encoding
+        // vector. TeX CM fonts (CMSY/CMMI/CMEX/CMR) ship without a PDF-level
+        // /Encoding and without /ToUnicode, so the only source of the byte →
+        // glyph-name mapping is the PFA/PFB stream in /FontFile.
+        if info.differences.is_none() && info.cmap.is_none() {
+            if let Some(diffs) = extract_encoding_from_font_program(&font_obj, &get_object) {
+                info.differences = Some(diffs);
+            }
         }
 
         // Try to get ToUnicode CMap
@@ -840,6 +965,20 @@ fn adobe_glyph_to_char(name: &[u8]) -> Option<char> {
         "onequarter" => Some('¼'),
         "onesuperior" => Some('¹'),
         "plusminus" => Some('±'),
+        // Math glyphs commonly recovered from CM font programs
+        "asteriskmath" => Some('∗'),
+        "circlemultiply" => Some('⊗'),
+        "circleplus" => Some('⊕'),
+        "circumflex" => Some('ˆ'),
+        "equivalence" => Some('≡'),
+        "existential" => Some('∃'),
+        "openbullet" => Some('◦'),
+        "prime" => Some('′'),
+        "propersubset" => Some('⊂'),
+        "propersuperset" => Some('⊃'),
+        "reflectequiv" => Some('≅'),
+        "similar" => Some('∼'),
+        "universal" => Some('∀'),
         "quotedblbase" => Some('„'),
         "quotedblleft" => Some('\u{201C}'),
         "quotedblright" => Some('\u{201D}'),
