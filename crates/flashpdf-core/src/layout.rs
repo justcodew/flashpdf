@@ -657,6 +657,7 @@ mod tests {
             c,
             bbox: [x, y, x + w, y + h],
             size: h,
+            rotated: false,
         }
     }
 

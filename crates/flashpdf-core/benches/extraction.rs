@@ -49,6 +49,7 @@ fn bench_full_extraction(c: &mut Criterion) {
             include_images: false,
             gpu: false,
             batch_size: 0,
+            include_rotated: false,
         };
 
         c.bench_function("full_extract_single_page", |b| {

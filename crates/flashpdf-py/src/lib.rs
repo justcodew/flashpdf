@@ -26,9 +26,9 @@ fn flashpdf(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// text). Pages are shared with `Arc` internally, so `doc[i]` is O(1) —
 /// no per-access clone of the page's blocks/images.
 #[pyfunction]
-#[pyo3(signature = (path, include_images=true))]
-fn open(path: &str, include_images: bool) -> PyResult<PyDocument> {
-    PyDocument::open(path, include_images)
+#[pyo3(signature = (path, include_images=true, include_rotated=false))]
+fn open(path: &str, include_images: bool, include_rotated: bool) -> PyResult<PyDocument> {
+    PyDocument::open(path, include_images, include_rotated)
 }
 
 /// Extract text blocks and images from a single PDF file.
@@ -37,7 +37,7 @@ fn open(path: &str, include_images: bool) -> PyResult<PyDocument> {
 /// a third element `pages` — a list of `{page, is_scanned}` dicts, useful for
 /// detecting scanned pages that need OCR.
 #[pyfunction]
-#[pyo3(signature = (path, page_parallel=true, include_images=true, gpu=false, batch_size=50, with_page_info=false))]
+#[pyo3(signature = (path, page_parallel=true, include_images=true, gpu=false, batch_size=50, with_page_info=false, include_rotated=false))]
 #[allow(clippy::too_many_arguments)]
 fn extract<'py>(
     py: Python<'py>,
@@ -47,6 +47,7 @@ fn extract<'py>(
     gpu: bool,
     batch_size: usize,
     with_page_info: bool,
+    include_rotated: bool,
 ) -> PyResult<Bound<'py, PyList>> {
     let options = flashpdf_core::ExtractOptions {
         page_parallel,
@@ -54,6 +55,7 @@ fn extract<'py>(
         include_images,
         gpu,
         batch_size,
+        include_rotated,
     };
 
     let result = flashpdf_core::extract(path, &options)
@@ -64,7 +66,7 @@ fn extract<'py>(
 
 /// Batch extract from multiple PDF files with file-level parallelism.
 #[pyfunction]
-#[pyo3(signature = (paths, file_parallel=true, page_parallel=false, include_images=false, gpu=false, batch_size=50, with_page_info=false))]
+#[pyo3(signature = (paths, file_parallel=true, page_parallel=false, include_images=false, gpu=false, batch_size=50, with_page_info=false, include_rotated=false))]
 #[allow(clippy::too_many_arguments)]
 fn extract_many<'py>(
     py: Python<'py>,
@@ -75,6 +77,7 @@ fn extract_many<'py>(
     gpu: bool,
     batch_size: usize,
     with_page_info: bool,
+    include_rotated: bool,
 ) -> PyResult<Bound<'py, PyList>> {
     let options = flashpdf_core::ExtractOptions {
         page_parallel,
@@ -82,6 +85,7 @@ fn extract_many<'py>(
         include_images,
         gpu,
         batch_size,
+        include_rotated,
     };
 
     let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
@@ -226,9 +230,9 @@ pub struct PyDocument {
 #[pymethods]
 impl PyDocument {
     #[new]
-    #[pyo3(signature = (path, include_images=true))]
-    fn new(path: &str, include_images: bool) -> PyResult<Self> {
-        Self::open(path, include_images)
+    #[pyo3(signature = (path, include_images=true, include_rotated=false))]
+    fn new(path: &str, include_images: bool, include_rotated: bool) -> PyResult<Self> {
+        Self::open(path, include_images, include_rotated)
     }
 
     /// Number of pages. `len(doc)`.
@@ -285,13 +289,14 @@ impl PyDocument {
 }
 
 impl PyDocument {
-    fn open(path: &str, include_images: bool) -> PyResult<Self> {
+    fn open(path: &str, include_images: bool, include_rotated: bool) -> PyResult<Self> {
         let opts = flashpdf_core::ExtractOptions {
             page_parallel: true,
             file_parallel: false,
             include_images,
             gpu: false,
             batch_size: 50,
+            include_rotated,
         };
         let result = flashpdf_core::extract(path, &opts)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;

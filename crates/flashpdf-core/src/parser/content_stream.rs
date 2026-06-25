@@ -23,6 +23,12 @@ pub struct CharInfo {
     pub bbox: [f64; 4],
     /// Font size at emit time (per-char, from Tf operator)
     pub size: f64,
+    /// True if the char was emitted under a non-axis-aligned text matrix
+    /// (rotated/sheared text — e.g. arXiv watermarks, vertical chart axis
+    /// labels). Layout treats these as noise by default because XY-cut
+    /// can't mix horizontal and vertical blocks; users can opt in via
+    /// `ExtractOptions::include_rotated` to keep them.
+    pub rotated: bool,
 }
 
 /// A span of characters sharing the same font/size/color.
@@ -886,11 +892,22 @@ fn emit_string(
 
         i += code_bytes.len();
 
-        // Calculate character position
-        let (cx, cy) = state.ctm.apply(0.0, 0.0);
-        let (tx, ty) = state.tm.apply(0.0, 0.0);
-        let x = cx + tx;
-        let y = cy + ty;
+        // Calculate character position. For rotated/sheared text the full
+        // TRM = CTM × Tm is non-axis-aligned (b != 0 or c != 0); we compute
+        // the device-space bbox via 4-corner transform in that case.
+        // Otherwise the cheaper text-space offset path is used (preserves
+        // historical behavior and baseline accuracy). The check covers
+        // rotation in either Tm (text operator) or CTM (cm operator / Form
+        // XObject matrix).
+        let trm = state.ctm.mul(&state.tm);
+        let is_rotated = trm.b.abs() > 1e-6 || trm.c.abs() > 1e-6;
+        let (x, y) = if is_rotated {
+            trm.apply(0.0, 0.0)
+        } else {
+            let (cx, cy) = state.ctm.apply(0.0, 0.0);
+            let (tx, ty) = state.tm.apply(0.0, 0.0);
+            (cx + tx, cy + ty)
+        };
 
         // Character width from font widths or estimate
         let code_val = if code_bytes.len() == 2 {
@@ -910,26 +927,69 @@ fn emit_string(
             .unwrap_or(char_width_default);
         let char_height = font_size;
 
+        // For rotated text in default-width fallback mode (standard 14 fonts
+        // without /Widths — common for arXiv-style Times-Roman sidebars),
+        // char_width == font_size, which makes a 40-char sidebar span 2× the
+        // page height and get dropped by the reading_order_sort margin
+        // filter. Substitute a realistic Latin-text average (0.5em) for the
+        // advance and per-char unit width so the rotated block stays inside
+        // the page rect. This branch is ONLY taken for rotated chars in
+        // fallback mode — non-rotated extraction is byte-for-byte unchanged.
+        let using_default_width = font_info.is_some_and(|f| f.widths.is_empty())
+            && font_info.is_some_and(|f| f.cid_font.is_none());
+        let n = decoded_chars.len();
+        let (unit_w, advance_w) = if is_rotated && using_default_width {
+            let est = font_size * 0.5 * h_scale;
+            (est / n.max(1) as f64, est)
+        } else {
+            let unit_w = char_width / n.max(1) as f64;
+            (unit_w, char_width)
+        };
+
         // Decode may yield multiple chars (e.g. TeX ligatures: byte 0x0C →
         // "fi"). Push each with proportional width so the rest of the
         // pipeline sees the same number of chars PyMuPDF does.
-        let n = decoded_chars.len();
-        let unit_w = char_width / n.max(1) as f64;
         for (k, c) in decoded_chars.into_iter().enumerate() {
-            let cx0 = x + unit_w * k as f64;
+            let off = unit_w * k as f64;
+            let bbox = if is_rotated {
+                // Transform all 4 corners of the char cell through TRM and
+                // take the AABB. Adobe AFM metrics aren't embedded, so
+                // standard-font widths (Times/Helvetica) may be off — we
+                // accept that as the cost of recovering rotated text.
+                let (ax, ay) = trm.apply(off, 0.0);
+                let (bx, by) = trm.apply(off + unit_w, 0.0);
+                let (cx2, cy2) = trm.apply(off, char_height);
+                let (dx, dy) = trm.apply(off + unit_w, char_height);
+                [
+                    ax.min(bx).min(cx2).min(dx),
+                    ay.min(by).min(cy2).min(dy),
+                    ax.max(bx).max(cx2).max(dx),
+                    ay.max(by).max(cy2).max(dy),
+                ]
+            } else {
+                [x + off, y, x + off + unit_w, y + char_height]
+            };
             result.chars.push(CharInfo {
                 c,
-                bbox: [cx0, y, cx0 + unit_w, y + char_height],
+                bbox,
                 size: font_size,
+                rotated: is_rotated,
             });
         }
 
-        // Advance text matrix
-        let advance = char_width + state.char_spacing;
-        if code_bytes.len() == 1 && code_bytes[0] == b' ' {
-            let total_advance = advance + state.word_spacing;
-            let m = Matrix::new(1.0, 0.0, 0.0, 1.0, total_advance, 0.0);
-            state.tm = m.mul(&state.tm);
+        // Advance text matrix along the text direction. For rotated text
+        // the advance happens along (a,b) in text space; for axis-aligned
+        // text the historical pre-multiply is exact.
+        let advance = advance_w + state.char_spacing;
+        let advance = if code_bytes.len() == 1 && code_bytes[0] == b' ' {
+            advance + state.word_spacing
+        } else {
+            advance
+        };
+        if is_rotated {
+            let mag = (state.tm.a.powi(2) + state.tm.b.powi(2)).sqrt().max(1e-9);
+            state.tm.e += advance * state.tm.a / mag;
+            state.tm.f += advance * state.tm.b / mag;
         } else {
             let m = Matrix::new(1.0, 0.0, 0.0, 1.0, advance, 0.0);
             state.tm = m.mul(&state.tm);
@@ -948,6 +1008,7 @@ fn emit_space(state: &TextState, result: &mut ContentResult) {
         c: ' ',
         bbox: [x, y, x + w, y + state.font_size],
         size: state.font_size,
+        rotated: false,
     });
 }
 

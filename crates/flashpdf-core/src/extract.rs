@@ -19,6 +19,14 @@ pub struct ExtractOptions {
     pub gpu: bool,
     /// Batch size for large documents (0 = no batching).
     pub batch_size: usize,
+    /// When false (default), chars emitted under a non-axis-aligned text
+    /// matrix are dropped before clustering. This preserves baseline
+    /// accuracy on ordinary documents because XY-cut reading order can't
+    /// mix horizontal and vertical text. Set to true to keep rotated text
+    /// (arXiv watermarks, vertical chart labels) — they will be clustered
+    /// and appended to the page's block list, but layout/reading order on
+    /// mixed-orientation pages may degrade.
+    pub include_rotated: bool,
 }
 
 impl Default for ExtractOptions {
@@ -29,6 +37,7 @@ impl Default for ExtractOptions {
             include_images: true,
             gpu: false,
             batch_size: 50,
+            include_rotated: false,
         }
     }
 }
@@ -290,11 +299,38 @@ fn extract_single_page(
 
     let font_size = 12.0;
 
-    // Cluster chars into blocks
-    let blocks = cluster_chars(&scan_result.chars, &font_name, font_size, 0);
-    // Sort blocks into visual reading order (recursive XY-cut)
+    // Split chars by rotation: body chars go through the normal cluster →
+    // XY-cut pipeline; rotated chars (arXiv watermarks, vertical axis
+    // labels) are clustered separately and appended at the end so they
+    // don't perturb the body's reading order. Default behavior (no
+    // include_rotated) drops rotated chars entirely.
+    let (body_chars, rot_chars): (Vec<_>, Vec<_>) = if options.include_rotated {
+        scan_result.chars.iter().cloned().partition(|c| !c.rotated)
+    } else {
+        (
+            scan_result
+                .chars
+                .iter()
+                .filter(|c| !c.rotated)
+                .cloned()
+                .collect(),
+            Vec::new(),
+        )
+    };
+
+    // Cluster body chars and sort into visual reading order (recursive XY-cut).
+    let blocks = cluster_chars(&body_chars, &font_name, font_size, 0);
     let rect = page_rect(&page, &blocks);
-    let blocks = crate::layout::reading_order_sort(blocks, rect);
+    let mut blocks = crate::layout::reading_order_sort(blocks, rect);
+
+    // Cluster rotated chars separately. Each connected run (sidebar, axis
+    // label) becomes its own block. Append at end so body reading order is
+    // preserved — this matches the documented behavior that rotated text
+    // is not woven into the XY-cut output.
+    if !rot_chars.is_empty() {
+        let mut rot_blocks = cluster_chars(&rot_chars, &font_name, font_size, 0);
+        blocks.append(&mut rot_blocks);
+    }
 
     // Detect scanned page (heuristic: little text + large image covering the page)
     let is_scanned = detect_scanned(&blocks, &scan_result.images, &rect);
