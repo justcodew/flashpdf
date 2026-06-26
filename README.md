@@ -518,25 +518,25 @@ pdfplumber / pdftext / pymupdf4llm / markitdown：
 
 | 库 | 成功 n | mean | p50 | p95 | p99 | ms/页 p50 |
 |---|---:|---:|---:|---:|---:|---:|
-| **flashpdf** | **165/165** | **2.88ms** | **0.87ms** | 7.56ms | 47.7ms | **555ms** |
-| liteparse | 164/165 | 16.23ms | 1.60ms | 49.0ms | 292.1ms | 1362ms |
-| pdf_oxide | 164/165 | 16.09ms | 1.62ms | 40.2ms | 321.4ms | 1350ms |
+| **flashpdf** | **165/165** | **2.98ms** | **0.87ms** | 7.60ms | 55.0ms | **552ms** |
+| liteparse | 164/165 | 16.31ms | 1.68ms | 51.4ms | 293.3ms | 1362ms |
+| pdf_oxide | 164/165 | 16.31ms | 1.59ms | 40.1ms | 323.5ms | 1349ms |
 
 **单文件速度比（geo-mean）**
 
 | 对比 | n | geo-mean | p25 | p50 | p75 | min | max |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| liteparse/flashpdf | 164 | **2.13×** | 1.02× | 2.30× | 4.43× | 0.07× | 900× |
-| pdf_oxide/flashpdf | 164 | **2.01×** | 0.95× | 1.84× | 3.97× | 0.09× | 1108× |
+| liteparse/flashpdf | 164 | **2.12×** | 0.96× | 2.31× | 4.23× | 0.08× | 968× |
+| pdf_oxide/flashpdf | 164 | **1.98×** | 0.94× | 1.71× | 3.85× | 0.10× | 1218× |
 
 **按文件大小分桶——优势随文件大小增长**
 
 | 桶 | n | fp p50 | lp/fp | po/fp |
 |---|---:|---:|---:|---:|
-| tiny <10KB | 31 | 0.21ms | 1.38× | **0.85×**（pdf_oxide 反超） |
-| small 10-100KB | 51 | 0.64ms | 1.52× | 1.46× |
-| medium 100KB-1MB | 63 | 1.47ms | 2.92× | 3.19× |
-| **large >1MB** | 20 | 6.04ms | **3.63×** | **4.11×** |
+| tiny <10KB | 31 | 0.21ms | 1.34× | **0.80×**（pdf_oxide 反超） |
+| small 10-100KB | 51 | 0.70ms | 1.53× | 1.46× |
+| medium 100KB-1MB | 63 | 1.40ms | 2.91× | 3.15× |
+| **large >1MB** | 20 | 6.27ms | **3.64×** | **4.22×** |
 
 **失败率：flashpdf 0%，corpus 最低**
 
@@ -548,8 +548,8 @@ pdfplumber / pdftext / pymupdf4llm / markitdown：
 
 **诚实的结论**
 
-- flashpdf 的**真实平均优势是 2×**（geo-mean），不是单文件场景下的 5-12×。
-  单文件数据被并行红利放大了——4 核 + 14 页时 rayon 接近线性加速。
+- flashpdf 的**真实平均优势是 ~2×**（geo-mean 2.12× vs liteparse，1.98× vs pdf_oxide），
+  不是单文件场景下的 5-12×。单文件数据被并行红利放大了——4 核 + 14 页时 rayon 接近线性加速。
 - **优势随文件大小增长**：tiny 文件 pdf_oxide 略快（flashpdf 启动开销分摊不开），
   large 文件 flashpdf 领先 3.6-4.1×。RAG 索引、批量预处理等"重负载"场景适合 flashpdf；
   小文件批量（发票、邮件附件）pdf_oxide 可能更快。

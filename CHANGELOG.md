@@ -52,8 +52,8 @@ PyMuPDF bug-regression corpus（165 个病理 PDF）：
 | flashpdf 失败率 | 2% (4/165) | **0% (0/165)** |
 | CRASH (test_3072) | 1 | **0** |
 | ValueError (test2238/2788/cython) | 3 | **0** |
-| geo-mean vs liteparse | 2.78× | **2.13×** |
-| geo-mean vs pdf_oxide | 2.54× | **2.01×** |
+| geo-mean vs liteparse | 2.78× | **2.12×** |
+| geo-mean vs pdf_oxide | 2.54× | **1.98×** |
 
 flashpdf 在该 corpus 上失败率最低（liteparse / pdf_oxide 各 1%），速度
 geo-mean 仍稳定 2× 同侪。速度数字相比 v0.3.1 略降是因为 v0.3.1 跳过了
@@ -63,10 +63,10 @@ test_3072 这个崩溃文件，v0.3.2 把它纳入计时。
 
 | 桶 | n | fp p50 | lp / fp | po / fp |
 |------|--:|--:|--:|--:|
-| tiny <10KB | 31 | 0.21ms | 1.38× | 0.85× |
-| small 10-100KB | 51 | 0.64ms | 1.52× | 1.46× |
-| medium 100KB-1MB | 63 | 1.47ms | 2.92× | 3.19× |
-| large >1MB | 20 | 6.04ms | 3.63× | 4.11× |
+| tiny <10KB | 31 | 0.21ms | 1.34× | 0.80× |
+| small 10-100KB | 51 | 0.70ms | 1.53× | 1.46× |
+| medium 100KB-1MB | 63 | 1.40ms | 2.91× | 3.15× |
+| large >1MB | 20 | 6.27ms | 3.64× | 4.22× |
 
 flashpdf 在 medium / large 文件上 2.9-4.1× 领先；tiny 文件 pdf_oxide
 略快（0.85×）—— 这是启动开销主导的区间，flashpdf 的 rayon 线程池设置
