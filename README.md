@@ -243,9 +243,12 @@ cargo bench -p flashpdf-core   # 性能基准
 ## 路线图
 
 - [x] 自研解析器 / 内容流 / 字体 / 布局 / 图像 / 并行化 / PyPI 发布 + CI/CD
-- [ ] 链接提取 · `span.flags` 格式探测 · 竖排文本聚类
+- [ ] **v0.4.0** fitz 功能补全：`span.flags` · TOC · 链接 API · CLI
+- [ ] **v0.5.0** 适用面扩大：加密 PDF · 错误信息 · examples · 迁移指南
+- [ ] **v0.6.0** 精度深挖：Type3 · 竖排文本 · char_sim 残差
+- [ ] **v0.7.0** 规模化：扩语料 · tiny 性能 · logging · PERFORMANCE.md
 
-详见 [TODO.md](TODO.md)。
+详见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
 ## 许可证
 
