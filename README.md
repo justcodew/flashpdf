@@ -477,31 +477,33 @@ PDF 文件
 
 完整对比（性能 + 精度 + 结构）见 [性能基准报告](docs/BENCHMARK.md)。
 
-### 与 9 个主流 Python PDF 库的对比
+### 与 10 个主流 Python PDF 库的对比
 
-在两个真实 arxiv 学术 PDF（14-15 页，含 LaTeX 数学公式）上，flashpdf v0.1.3
-对比 pdf_oxide / PyMuPDF / pypdfium2 / pypdf / pdfminer / pdfplumber /
-pdftext / pymupdf4llm / markitdown：
+在两个真实 arxiv 学术 PDF（14-15 页，含 LaTeX 数学公式）上，flashpdf v0.3.0
+对比 liteparse / pdf_oxide / PyMuPDF / pypdfium2 / pypdf / pdfminer /
+pdfplumber / pdftext / pymupdf4llm / markitdown：
 
 | 文件 | 库（按速度排序） | Mean | vs flashpdf |
 |------|-----------------|-----:|------------:|
-| **dbnet_plus (15p)** | **flashpdf (MT)** | **4.93ms** | — |
-|                  | pypdfium2 | 47.08ms | 9.5x 慢 |
-|                  | pdf_oxide | 60.22ms | 12.2x 慢 |
-|                  | pypdf | 194.32ms | 39.4x 慢 |
-|                  | PyMuPDF | 270.15ms | 54.8x 慢 |
+| **dbnet_plus (15p)** | **flashpdf (MT)** | **4.4ms** | — |
+|                  | liteparse | 54.7ms | 12.4x 慢 |
+|                  | pdf_oxide | 60.2ms | 13.6x 慢 |
+|                  | pypdfium2 | 47.1ms | 9.5x 慢（v0.1.3 基准） |
+|                  | pypdf | 194.3ms | 39.4x 慢 |
+|                  | PyMuPDF | 270.2ms | 54.8x 慢 |
 |                  | pdftext / pdfminer / pdfplumber | 430-870ms | 87-176x 慢 |
 |                  | pymupdf4llm | 28,219ms | 5722x 慢（OCR 回退） |
-| **arxiv_2604 (14p)** | **flashpdf (MT)** | **8.44ms** | — |
-|                  | pypdfium2 | 68.24ms | 8.1x 慢 |
-|                  | pdf_oxide | 75.44ms | 8.9x 慢 |
-|                  | PyMuPDF | 109.88ms | 13.0x 慢 |
-|                  | pypdf | 362.54ms | 42.9x 慢 |
+| **arxiv_2604 (14p)** | **flashpdf (MT)** | **8.3ms** | — |
+|                  | liteparse | 60.3ms | 7.3x 慢 |
+|                  | pypdfium2 | 68.2ms | 8.1x 慢 |
+|                  | pdf_oxide | 75.4ms | 8.9x 慢 |
+|                  | PyMuPDF | 109.9ms | 13.0x 慢 |
+|                  | pypdf | 362.5ms | 42.9x 慢 |
 |                  | pdftext / pdfminer / pdfplumber | 480-1247ms | 57-148x 慢 |
 |                  | pymupdf4llm | 23,405ms | 2773x 慢（OCR 回退） |
 
 **flashpdf 是唯一在真实学术论文上 sub-10ms 完成文本提取的 Python 库**，比次快的
-pypdfium2 快 8-10x，比 pdf_oxide 快 9-12x，比 PyMuPDF 快 13-55x。
+pypdfium2 / liteparse 快 7-12x，比 pdf_oxide 快 9-14x，比 PyMuPDF 快 13-55x。
 
 > 注：pdf_oxide README 的 "0.8ms mean" 来自 3,830 个 1-2 页小型 PDF 语料库
 > （veraPDF + Mozilla pdf.js + SafeDocs）的平均值。真实学术论文负载重 10-20 倍。
