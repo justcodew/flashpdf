@@ -24,7 +24,7 @@ pub fn recover_xref_by_scan(data: &[u8]) -> ParseResult<XrefTable> {
         let abs_pos = offset + pos;
 
         // Check if this is actually `N G obj` (not inside a string/stream)
-        if let Some(entry) = try_parse_obj_header(data, abs_pos) {
+        if let Some((obj_num, gen, header_start)) = try_parse_obj_header(data, abs_pos) {
             // If it's the catalog, record the root
             if root.is_none() {
                 if let Some(obj) = try_parse_object_at(data, abs_pos) {
@@ -37,14 +37,14 @@ pub fn recover_xref_by_scan(data: &[u8]) -> ParseResult<XrefTable> {
                             });
                             if let Some(_r) = find_ref_in_dict(d, b"Pages") {
                                 // This is actually the catalog; Root is itself
-                                root = Some(ObjectId::new(entry.0, entry.1));
+                                root = Some(ObjectId::new(obj_num, gen));
                             }
                         }
                     }
                 }
             }
 
-            entries.insert(entry.0, XrefEntry::uncompressed(abs_pos as u32, entry.1));
+            entries.insert(obj_num, XrefEntry::uncompressed(header_start as u32, gen));
         }
 
         offset = abs_pos + needle.len();
@@ -82,16 +82,17 @@ pub fn recover_xref_by_scan(data: &[u8]) -> ParseResult<XrefTable> {
 }
 
 /// Try to parse `N G obj` at the given position.
-/// Returns (obj_num, gen) if successful.
-fn try_parse_obj_header(data: &[u8], obj_keyword_pos: usize) -> Option<(u32, u16)> {
+/// Returns (obj_num, gen, header_start) where header_start is the byte offset
+/// of the leading digit of the object number — the offset that parse_object_at
+/// expects. Recording obj_keyword_pos instead would leave parse_object_at
+/// reading "obj\n<<..." which has no leading digit → InvalidNumber on every
+/// recovery-built xref entry.
+fn try_parse_obj_header(data: &[u8], obj_keyword_pos: usize) -> Option<(u32, u16, usize)> {
     // The "obj" keyword should be preceded by "N G " (with optional whitespace)
     // Scan backwards from obj_keyword_pos
     if obj_keyword_pos < 4 {
         return None;
     }
-
-    // Look backwards for the pattern: digits, whitespace, digits, whitespace
-    let _before = &data[..obj_keyword_pos];
 
     // Find the last whitespace before "obj"
     let mut pos = obj_keyword_pos;
@@ -141,7 +142,7 @@ fn try_parse_obj_header(data: &[u8], obj_keyword_pos: usize) -> Option<(u32, u16
     let obj_num: u32 = num_str.parse().ok()?;
     let gen: u16 = gen_str.parse().ok()?;
 
-    Some((obj_num, gen))
+    Some((obj_num, gen, num_start))
 }
 
 /// Minimal object representation for recovery scanning
@@ -483,13 +484,13 @@ mod tests {
     fn test_try_parse_obj_header() {
         let data = b"1 0 obj";
         let result = try_parse_obj_header(data, 4); // position of "obj"
-        assert_eq!(result, Some((1, 0)));
+        assert_eq!(result, Some((1, 0, 0)));
     }
 
     #[test]
     fn test_try_parse_obj_header_gen_nonzero() {
         let data = b"5 3 obj";
         let result = try_parse_obj_header(data, 4);
-        assert_eq!(result, Some((5, 3)));
+        assert_eq!(result, Some((5, 3, 0)));
     }
 }

@@ -38,22 +38,19 @@ impl Document {
 
         // Try standard xref parsing first; fall back to memchr recovery
         let xref = match find_startxref(data) {
-            Ok(xref_offset) => {
-                if is_standard_xref(data, xref_offset) {
-                    parse_xref_table(data, xref_offset)
-                } else {
-                    // xref stream
-                    let (dict, stream_data) = resolve_indirect_object_raw(data, xref_offset)?;
-                    parse_xref_stream_obj(&dict, stream_data)
-                }
-            }
+            Ok(xref_offset) => Self::parse_xref_at(data, xref_offset),
             Err(_) => Err(ParseError::Message("startxref not found")),
         };
 
-        // Fallback: memchr full-file recovery
+        // Validate: if the declared xref root doesn't actually point at a
+        // parseable object header, the table is corrupt (off-by-N offsets
+        // are common when files have prefix garbage — e.g. test2238.pdf has
+        // 120 bytes of text before %PDF-, shifting every real offset but
+        // leaving the xref entries pointing at pre-shift positions). Fall
+        // back to recovery scan which finds objects by pattern.
         let xref = match xref {
-            Ok(x) => x,
-            Err(_) => recover_xref_by_scan(data)?,
+            Ok(x) if xref_root_ok(data, &x) => x,
+            _ => recover_xref_by_scan(data)?,
         };
 
         // Check for encryption
@@ -67,6 +64,28 @@ impl Document {
             object_cache: RwLock::new(HashMap::new()),
             objstm_cache: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Try to parse the xref at the given offset (table or stream).
+    /// Errors propagate as Err so the caller can fall back to recovery.
+    fn parse_xref_at(data: &[u8], xref_offset: usize) -> ParseResult<XrefTable> {
+        if is_standard_xref(data, xref_offset) {
+            return parse_xref_table(data, xref_offset);
+        }
+        // xref stream — resolve_indirect_object_raw gives us the dict and the
+        // RAW (still-compressed) stream bytes. Cross-reference streams are
+        // almost always FlateDecode-compressed, so we must apply /Filter
+        // before handing the data to parse_xref_stream_obj.
+        let (dict, raw_stream_data) = resolve_indirect_object_raw(data, xref_offset)?;
+        let filter = dict
+            .iter()
+            .find(|(k, _)| *k == b"Filter")
+            .map(|(_, v)| v.clone());
+        let stream_data: Vec<u8> = match filter {
+            Some(f) => decompress_stream(raw_stream_data, &f)?,
+            None => raw_stream_data.to_vec(),
+        };
+        parse_xref_stream_obj(&dict, &stream_data)
     }
 
     /// Get the document catalog (root) object.
@@ -438,4 +457,26 @@ fn resolve_indirect_object_raw<'a>(
 /// This is safe because the underlying mmap data lives as long as the Document.
 fn leak_pdf_object<'a>(obj: PdfObject<'a>) -> ParseResult<PdfObject<'static>> {
     Ok(unsafe { std::mem::transmute::<PdfObject<'a>, PdfObject<'static>>(obj) })
+}
+
+/// Quick sanity check on a parsed xref: the root's declared offset must point
+/// at a valid `N G obj` header. Catches PDFs whose xref table/stream is
+/// well-formed but whose offsets don't match reality (prefix garbage, bad
+/// linearization, etc.). Returns true when OK or when the root is inside an
+/// object stream (we can't validate compressed entries cheaply, so trust them).
+fn xref_root_ok(data: &[u8], xref: &XrefTable) -> bool {
+    let Some(entry) = xref.get(xref.root.num) else {
+        return false;
+    };
+    if entry.entry_type != XrefEntryType::Uncompressed {
+        return true; // Compressed-in-ObjStm: defer to get_object path.
+    }
+    let offset = entry.field1 as usize;
+    if offset >= data.len() {
+        return false;
+    }
+    // The byte at the offset should eventually lead into "obj" within a few
+    // bytes: "<obj_num> <gen> obj". Allow leading whitespace.
+    let window_end = (offset + 32).min(data.len());
+    memchr::memmem::find(&data[offset..window_end], b"obj").is_some()
 }

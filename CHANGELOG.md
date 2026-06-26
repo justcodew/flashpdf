@@ -1,5 +1,77 @@
 # Changelog
 
+## [0.3.2] - 2026-06-26
+
+### Fixed
+
+- **`xy_cut` 无限递归（SIGBUS on `test_3072.pdf`）**：`largest_gap` 计算 gap
+  时过滤掉 extent > 70% 的"宽"块（页码横幅、整页侧栏），但 `split_by_axis`
+  对所有块做切分。当 gap 只存在于过滤后的窄块子集中时，split 一边为空、
+  另一边是全集 → 递归 `xy_cut(全集)` 找同一个 gap 同一个 split → 无限递归
+  → 栈溢出 → SIGBUS（exit 138）。
+
+  加防重入守卫：split 后任一半为空就 re-merge 并 fall through 到下一个
+  cut 或 sort fallback，而不是带着空半 recurse。
+
+- **recovery 记录错位的对象偏移**：`recover_xref_by_scan` 之前把
+  `"obj"` 关键字的字节位置当作对象偏移记进 xref，但 `parse_object_at`
+  期望偏移指向对象头部的起始数字（`N G obj`）。导致每个 recovery-built
+  xref 条目都让 `parse_object_at` 在 `"obj\n<<..."` 上读不到数字，
+  InvalidNumber 错误，所有页都识别不到。
+
+  `try_parse_obj_header` 返回 `(obj_num, gen, header_start)` 三元组，
+  其中 `header_start` 是对象号起始数字的字节位置，记进 xref。
+
+- **`from_mmap` 的 `?` 短路绕过 recovery fallback**：xref-stream 分支
+  里 `resolve_indirect_object_raw(...)?` 直接从函数返回，导致下游的
+  `match xref { Err(_) => recover_xref_by_scan(...)? }` 永远看不到这个
+  错误。重构为 `parse_xref_at` helper 返回 `Result<XrefTable>`，所有
+  错误统一走 recovery fallback。
+
+- **xref stream 未解压**：`parse_xref_at` 把 raw（仍压缩的）stream 字节
+  直接交给 `parse_xref_stream_obj`，导致 "xref stream data too short"。
+  xref stream 几乎总是 FlateDecode 压缩，现在先按 `/Filter` 解压再解析。
+
+- **ObjStm 内对象边界计算错误**：`parse_objstm` 第 i 个对象的 start 用了
+  `obj_offsets[i-1]`（前一个对象的起点）而非 `obj_offsets[i]`（自己的
+  起点）。i > 0 的每个对象都把前一个对象的字节当作自己的内容来 parse，
+  结果 ObjStm 里只有第 0 个对象正确。`cython.pdf` 的 catalog（176）藏在
+  ObjStm 139 里因此完全取不到，page_refs 失败。
+
+- **xref root 偏移有效性校验**：`xref_root_ok` 新增——xref 解析成功后，
+  校验 root 对象的偏移确实指向 `"N G obj"` 头部。校验失败则 fall through
+  到 recovery scan。捕获 test2238.pdf（120 字节 prefix garbage 导致所有
+  xref 偏移整体偏移）这类文件。
+
+### Benchmark 影响
+
+PyMuPDF bug-regression corpus（165 个病理 PDF）：
+
+| 指标 | v0.3.1 | v0.3.2 |
+|------|-------:|-------:|
+| flashpdf 失败率 | 2% (4/165) | **0% (0/165)** |
+| CRASH (test_3072) | 1 | **0** |
+| ValueError (test2238/2788/cython) | 3 | **0** |
+| geo-mean vs liteparse | 2.78× | **2.13×** |
+| geo-mean vs pdf_oxide | 2.54× | **2.01×** |
+
+flashpdf 在该 corpus 上失败率最低（liteparse / pdf_oxide 各 1%），速度
+geo-mean 仍稳定 2× 同侪。速度数字相比 v0.3.1 略降是因为 v0.3.1 跳过了
+test_3072 这个崩溃文件，v0.3.2 把它纳入计时。
+
+按文件大小分桶 speedup（geo-mean）：
+
+| 桶 | n | fp p50 | lp / fp | po / fp |
+|------|--:|--:|--:|--:|
+| tiny <10KB | 31 | 0.21ms | 1.38× | 0.85× |
+| small 10-100KB | 51 | 0.64ms | 1.52× | 1.46× |
+| medium 100KB-1MB | 63 | 1.47ms | 2.92× | 3.19× |
+| large >1MB | 20 | 6.04ms | 3.63× | 4.11× |
+
+flashpdf 在 medium / large 文件上 2.9-4.1× 领先；tiny 文件 pdf_oxide
+略快（0.85×）—— 这是启动开销主导的区间，flashpdf 的 rayon 线程池设置
+成本不被几个 KB 的内容抵消。
+
 ## [0.3.1] - 2026-06-26
 
 ### Fixed

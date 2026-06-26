@@ -34,9 +34,9 @@ CORPUS = Path("/Users/xiongzhaolong/Downloads/PyMuPDF-main/tests/resources")
 # flashpdf's). Skip to keep the bench script responsive.
 LITEPARSE_SKIP = {"circular-toc.pdf"}
 
-# flashpdf native-crash (SIGBUS) on this file during open(). Pre-existing
-# bug unrelated to recent fixes. Skip to keep the bench script responsive.
-FLASHPDF_SKIP = {"test_3072.pdf"}
+# flashpdf v0.3.2 fixed the SIGBUS on test_3072.pdf (xy_cut infinite
+# recursion); no skip is needed anymore. LITEPARSE_SKIP retained because
+# liteparse's hang is upstream and not our bug to fix.
 
 # Size buckets — does flashpdf's advantage hold on tiny PDFs vs big ones?
 BUCKETS = [
@@ -48,8 +48,6 @@ BUCKETS = [
 
 
 def time_flashpdf(path: Path) -> tuple[float | None, int | None, str | None]:
-    if path.name in FLASHPDF_SKIP:
-        return None, None, "SKIP: known native crash"
     t0 = time.perf_counter()
     try:
         doc = flashpdf.open(str(path))
@@ -145,7 +143,8 @@ def main() -> None:
     print(f"flashpdf {flashpdf.__version__}  vs  pdf_oxide  vs  liteparse")
     print(f"corpus: {len(pdfs)} PDFs, {total_bytes / 1024 / 1024:.1f} MB total")
     print(f"sequential inline calls (no subprocess isolation); "
-          f"liteparse skips {len(LITEPARSE_SKIP)} known-hang file(s)\n")
+          f"liteparse skips {len(LITEPARSE_SKIP)} known-hang file(s); "
+          f"flashpdf skips none\n")
 
     rows: list[dict] = []
     t_corpus_start = time.perf_counter()

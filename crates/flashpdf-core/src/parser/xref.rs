@@ -403,12 +403,14 @@ pub fn parse_objstm<'a>(
     let data_start = &stream_data[first..];
 
     for (i, (obj_num, _abs_offset)) in obj_offsets.iter().enumerate() {
-        // Calculate the byte range for this object
-        let start = if i == 0 {
-            0
-        } else {
-            obj_offsets[i - 1].1 - first
-        };
+        // Each object's bytes span from its own declared offset to the next
+        // object's offset (or end of stream). The previous implementation
+        // used obj_offsets[i-1] as the start, which made object i reuse
+        // object i-1's bytes — every object after the first would parse as
+        // the wrong value (or fail entirely). On cython.pdf this caused the
+        // catalog (176) inside ObjStm 139 to be missing, so get_object(176)
+        // returned Null and the whole page walk failed.
+        let start = obj_offsets[i].1 - first;
         let end = if i + 1 < obj_offsets.len() {
             obj_offsets[i + 1].1 - first
         } else {

@@ -534,21 +534,39 @@ fn xy_cut(mut blocks: Vec<TextBlock>, rect: [f64; 4]) -> Vec<TextBlock> {
     // 1. Horizontal cut: separates title band from 2-col body.
     // split_by_axis returns (center<pos, center>=pos). In PDF y-up coords the
     // higher-y half (center>=pos) is visually ABOVE → must be returned first.
+    // Anti-recursion guard: largest_gap filters out wide blocks (>70% of
+    // rect extent) when computing the gap, but split_by_axis partitions ALL
+    // blocks. If the gap exists only in the narrow subset, one half ends up
+    // empty and the other holds the full set — recursing on the full set
+    // re-finds the same gap, same split, infinite recursion → stack overflow
+    // → SIGBUS. Guard: only recurse when both halves are non-empty;
+    // otherwise fall through to the next cut or the sort fallback.
     if let Some(g) = largest_gap(&blocks, 1, rect) {
         if g.gap >= READING_MIN_GAP_FRAC * (rect[3] - rect[1]) {
             let (bot_blocks, top_blocks) = split_by_axis(blocks, 1, g.pos);
-            let mut out = xy_cut(top_blocks, [rect[0], g.pos, rect[2], rect[3]]);
-            out.extend(xy_cut(bot_blocks, [rect[0], rect[1], rect[2], g.pos]));
-            return out;
+            if !top_blocks.is_empty() && !bot_blocks.is_empty() {
+                let mut out = xy_cut(top_blocks, [rect[0], g.pos, rect[2], rect[3]]);
+                out.extend(xy_cut(bot_blocks, [rect[0], rect[1], rect[2], g.pos]));
+                return out;
+            }
+            // One side empty → recombine and try the next cut.
+            let mut merged = top_blocks;
+            merged.extend(bot_blocks);
+            blocks = merged;
         }
     }
     // 2. Vertical cut: separates columns. Left column reads first.
     if let Some(g) = largest_gap(&blocks, 0, rect) {
         if g.gap >= READING_MIN_GAP_FRAC * (rect[2] - rect[0]) {
             let (l, r) = split_by_axis(blocks, 0, g.pos);
-            let mut out = xy_cut(l, [rect[0], rect[1], g.pos, rect[3]]);
-            out.extend(xy_cut(r, [g.pos, rect[1], rect[2], rect[3]]));
-            return out;
+            if !l.is_empty() && !r.is_empty() {
+                let mut out = xy_cut(l, [rect[0], rect[1], g.pos, rect[3]]);
+                out.extend(xy_cut(r, [g.pos, rect[1], rect[2], rect[3]]));
+                return out;
+            }
+            let mut merged = l;
+            merged.extend(r);
+            blocks = merged;
         }
     }
     // 3. Fallback: sort by (y_top DESC [higher y = visually above], x_left ASC).
