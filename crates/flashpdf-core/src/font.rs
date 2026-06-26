@@ -28,6 +28,11 @@ pub struct FontInfo {
     pub differences: Option<HashMap<u8, Vec<u8>>>,
     /// CIDFont descendant (for Type0 composite fonts)
     pub cid_font: Option<CIDFontInfo>,
+    /// fitz-compatible span flags bitmask (PDF spec §7.9.2 + name heuristics).
+    /// Bits (fitz numbering): italic=`2`, serif=`4`, monospaced=`8`, bold=`16`.
+    /// `0` when no signal is available. Populated by `build_font_map` after
+    /// resolving `/FontDescriptor /Flags`.
+    pub flags: u32,
 }
 
 /// A parsed ToUnicode CMap.
@@ -519,6 +524,10 @@ pub fn extract_font_info(font_obj: &PdfObject<'_>) -> FontInfo {
     // Extract /Differences from Encoding dict
     let differences = extract_differences(font_obj);
 
+    // Initial flags from base_font name heuristics; /FontDescriptor /Flags
+    // bits are OR'd in by build_font_map after resolving the indirect ref.
+    let flags = compute_font_flags(&base_font, None);
+
     FontInfo {
         base_font,
         encoding,
@@ -530,7 +539,102 @@ pub fn extract_font_info(font_obj: &PdfObject<'_>) -> FontInfo {
         cmap: None, // Populated later from ToUnicode stream
         differences,
         cid_font: None, // Populated for Type0 fonts
+        flags,
     }
+}
+
+/// Compute fitz-compatible span flags from a font's /BaseFont name and
+/// (optionally) /FontDescriptor /Flags. The bitmask uses fitz numbering
+/// so the result can flow directly to TextSpan.flags:
+///
+/// * `2^1 (2)` italic — PDF /Flags Italic (bit 7 = 64) or Script (bit 4 = 8), or name matches `*Italic*` / `*Oblique*`
+/// * `2^2 (4)` serif — PDF /Flags Serif (bit 2 = 2), or name matches `*Times*` / `*Serif*` / `*Garamond*` / `*Palatino*`
+/// * `2^3 (8)` monospaced — PDF /Flags FixedPitch (bit 1 = 1), or name matches `*Courier*` / `*Mono*` / `*Consolas*` / `*Menlo*`
+/// * `2^4 (16)` bold — name matches `*Bold*` / `*Black*` / `*Heavy*` / `*Demi*` / `*Semibold*`
+///
+/// PDF /Flags has no bold bit — bold is name-only.
+pub fn compute_font_flags(base_font: &str, descriptor_flags: Option<i64>) -> u32 {
+    let mut flags: u32 = 0;
+    let name_lower = base_font.to_ascii_lowercase();
+
+    // /FontDescriptor /Flags bits (PDF spec §7.9.2 Table 21)
+    if let Some(df) = descriptor_flags {
+        // bit 1 (value 1) = FixedPitch
+        if df & 0x01 != 0 {
+            flags |= 8; // mono
+        }
+        // bit 2 (value 2) = Serif
+        if df & 0x02 != 0 {
+            flags |= 4; // serif
+        }
+        // bit 4 (value 8) = Script
+        if df & 0x08 != 0 {
+            flags |= 2; // italic
+        }
+        // bit 7 (value 64) = Italic
+        if df & 0x40 != 0 {
+            flags |= 2; // italic
+        }
+    }
+
+    // Name heuristics — useful when /FontDescriptor is missing (subset fonts
+    // like "ABCDEF+TimesNewRoman-Bold" still carry the style suffix).
+    if name_lower.contains("bold")
+        || name_lower.contains("black")
+        || name_lower.contains("heavy")
+        || name_lower.contains("demi")
+        || name_lower.contains("semibold")
+    {
+        flags |= 16;
+    }
+    if name_lower.contains("italic") || name_lower.contains("oblique") {
+        flags |= 2;
+    }
+    if name_lower.contains("courier")
+        || name_lower.contains("mono")
+        || name_lower.contains("consolas")
+        || name_lower.contains("menlo")
+        || name_lower.contains("consol")
+        || name_lower.contains("nimbusmono")
+        // TeX Computer Modern Typewriter (monospace).
+        || name_lower.contains("cmtt")
+    {
+        flags |= 8;
+    }
+    if name_lower.contains("times")
+        || name_lower.contains("serif")
+        || name_lower.contains("garamond")
+        || name_lower.contains("palatino")
+        || name_lower.contains("georgia")
+        || name_lower.contains("songti")
+        || name_lower.contains("simsun")
+        || name_lower.contains("mincho")
+        // Ghostscript's Nimbus family ships as open-source clones of the
+        // standard 14: NimbusRom = Times-equivalent (serif), NimbusMono =
+        // Courier-equivalent (mono). Common in arxiv / academic PDFs.
+        || name_lower.contains("nimbusrom")
+        || name_lower.contains("nimbusromno")
+        // TeX Computer Modern family (CMR/CMB/CMMI/CMSY/CMEX) is serif by
+        // fitz convention. Math variants (CMMI/CMSY/CMMIB) are also italic.
+        || name_lower.starts_with("cmr")
+        || name_lower.starts_with("cmb")
+        || name_lower.starts_with("cmmi")
+        || name_lower.starts_with("cmsy")
+        || name_lower.starts_with("cmex")
+        || name_lower.contains("cambria")
+    {
+        flags |= 4;
+    }
+
+    // TeX Computer Modern Math / Symbol variants are italic by convention.
+    if name_lower.starts_with("cmmi")
+        || name_lower.starts_with("cmsy")
+        || name_lower.starts_with("cmmib")
+    {
+        flags |= 2;
+    }
+
+    flags
 }
 
 fn extract_differences(font_obj: &PdfObject<'_>) -> Option<HashMap<u8, Vec<u8>>> {
@@ -760,6 +864,17 @@ pub fn build_font_map<'a>(
         };
 
         let mut info = extract_font_info(&font_obj);
+
+        // Resolve /FontDescriptor /Flags (PDF spec §7.9.2 Table 21) and OR
+        // the converted bits into info.flags. extract_font_info already
+        // populated name-heuristic bits, so we only add /Flags-derived bits.
+        if let Some(PdfObject::Ref(r)) = font_obj.get(b"FontDescriptor") {
+            if let Ok(fd) = get_object(r.num) {
+                if let Some(df) = fd.get(b"Flags").and_then(|v| v.as_i64()) {
+                    info.flags |= compute_font_flags(&info.base_font, Some(df));
+                }
+            }
+        }
 
         // /Widths is commonly an indirect reference (e.g. "443 0 R") which
         // extract_font_info cannot resolve on its own. If widths is empty
@@ -1610,6 +1725,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_compute_font_flags_name_bold() {
+        // Name-only "Bold" → bold bit (16)
+        let f = compute_font_flags("Arial-BoldMT", None);
+        assert!(f & 16 != 0, "expected bold bit set, got {f:#b}");
+        // Not italic, not serif, not mono
+        assert_eq!(f & 2, 0);
+        assert_eq!(f & 4, 0);
+        assert_eq!(f & 8, 0);
+    }
+
+    #[test]
+    fn test_compute_font_flags_name_bold_italic() {
+        // Bold + Italic in name
+        let f = compute_font_flags("Helvetica-BoldOblique", None);
+        assert!(f & 16 != 0, "bold");
+        assert!(f & 2 != 0, "italic");
+    }
+
+    #[test]
+    fn test_compute_font_flags_courier_mono() {
+        // Courier → mono (8)
+        let f = compute_font_flags("Courier-New", None);
+        assert!(f & 8 != 0, "mono");
+    }
+
+    #[test]
+    fn test_compute_font_flags_times_serif() {
+        // Times → serif (4)
+        let f = compute_font_flags("Times-Roman", None);
+        assert!(f & 4 != 0, "serif");
+    }
+
+    #[test]
+    fn test_compute_font_flags_descriptor_fixed_pitch() {
+        // /Flags bit 1 (FixedPitch = 1) → fitz mono (8)
+        let f = compute_font_flags("SomeFont", Some(0x01));
+        assert!(f & 8 != 0, "FixedPitch should map to mono");
+    }
+
+    #[test]
+    fn test_compute_font_flags_descriptor_italic() {
+        // /Flags bit 7 (Italic = 64) → fitz italic (2)
+        let f = compute_font_flags("SomeFont", Some(0x40));
+        assert!(f & 2 != 0, "Italic bit should map to fitz italic");
+    }
+
+    #[test]
+    fn test_compute_font_flags_descriptor_serif() {
+        // /Flags bit 2 (Serif = 2) → fitz serif (4)
+        let f = compute_font_flags("SomeFont", Some(0x02));
+        assert!(f & 4 != 0, "Serif bit should map to fitz serif");
+    }
+
+    #[test]
+    fn test_compute_font_flags_combined_or() {
+        // /Flags combines with name heuristics
+        let f = compute_font_flags("ABCDEF+TimesNewRoman-Bold", Some(0x02));
+        assert!(f & 16 != 0, "bold from name");
+        assert!(f & 4 != 0, "serif from descriptor + name");
+    }
+
+    #[test]
+    fn test_compute_font_flags_no_signal_zero() {
+        assert_eq!(compute_font_flags("Helvetica", None), 0);
+    }
+
+    #[test]
     fn test_cmap_parse_simple() {
         let cmap_data = b"1 beginbfchar\n<41> <42>\nendbfchar\n";
         let cmap = parse_cmap(cmap_data).unwrap();
@@ -1648,6 +1830,7 @@ mod tests {
             cmap: None,
             differences: None,
             cid_font: None,
+            flags: 0,
         };
         assert_eq!(info.decode_char(&[0x41]), 'A');
         assert_eq!(info.decode_char(&[0x20]), ' ');
@@ -1667,6 +1850,7 @@ mod tests {
             cmap: None,
             differences: None,
             cid_font: None,
+            flags: 0,
         };
         assert_eq!(info.decode_char(&[0x41]), 'Α'); // Alpha
         assert_eq!(info.decode_char(&[0x61]), 'α'); // alpha
@@ -1694,6 +1878,7 @@ mod tests {
             cmap: None,
             differences: None,
             cid_font: None,
+            flags: 0,
         };
         assert_eq!(info.decode_char(&[0x46]), '✦'); // BLACK FOUR POINTED STAR
         assert_eq!(info.decode_char(&[0x6C]), '●'); // large black circle
@@ -1720,6 +1905,7 @@ mod tests {
             cmap: None,
             differences: None,
             cid_font: None,
+            flags: 0,
         };
         assert_eq!(info.decode_char(&[0x0F]), '•'); // bullet
         assert_eq!(info.decode_char(&[0x02]), '×'); // multiply
@@ -1745,6 +1931,7 @@ mod tests {
             }),
             differences: None,
             cid_font: None,
+            flags: 0,
         };
         assert_eq!(info.decode_char(&[0x00, 0x41]), 'a');
     }

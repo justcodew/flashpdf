@@ -47,6 +47,27 @@ for path, blocks, images in flashpdf.extract_many(
     ...
 ```
 
+### 命令行（`flashpdf`）
+
+```bash
+# 提取纯文本（默认模式，stdout）
+flashpdf extract paper.pdf
+
+# fitz 风格 JSON，并写入文件
+flashpdf extract paper.pdf --mode dict --pages 0,1,5-8 --output-dir out/
+
+# 元数据 + 页数概览
+flashpdf info paper.pdf
+flashpdf info paper.pdf --per-page      # 每页 is_scanned / 块数
+
+# 目录（outline / TOC）
+flashpdf toc paper.pdf                  # 树状缩进格式
+flashpdf toc paper.pdf --rich           # 完整 JSON（含 kind/uri/to_point）
+```
+
+`flashpdf` 命令随 `pip install` 自动注册（基于 click，[project.scripts] 入口）。
+
+
 ## 特性
 
 - **极致性能**：mmap 零拷贝、memchr SIMD 扫描、rayon 页级并行
@@ -243,9 +264,12 @@ cargo bench -p flashpdf-core   # 性能基准
 ## 路线图
 
 - [x] 自研解析器 / 内容流 / 字体 / 布局 / 图像 / 并行化 / PyPI 发布 + CI/CD
-- [ ] 链接提取 · `span.flags` 格式探测 · 竖排文本聚类
+- [ ] **v0.4.0** fitz 功能补全：`span.flags` · TOC · 链接 API · CLI
+- [ ] **v0.5.0** 适用面扩大：加密 PDF · 错误信息 · examples · 迁移指南
+- [ ] **v0.6.0** 精度深挖：Type3 · 竖排文本 · char_sim 残差
+- [ ] **v0.7.0** 规模化：扩语料 · tiny 性能 · logging · PERFORMANCE.md
 
-详见 [TODO.md](TODO.md)。
+详见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
 ## 许可证
 

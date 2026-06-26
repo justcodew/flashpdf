@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.4.0] - 2026-06-27
+
+Phase 1 完成 —— fitz 功能补全。新增 5 个 API 表面，向后兼容 0.3.x。
+
+### Added
+
+- **`doc.metadata`** (1.1)：返回 fitz 兼容的 metadata dict
+  （title/author/subject/keywords/creator/producer/creationDate/modDate/
+  format/encryption/size）。UTF-16BE CJK + PDFDocEncoding + hex string
+  + literal escape 都正确解码。`doc.pdf_version` 暴露 `%PDF-X.Y`。
+
+- **`page.get_links()` + `extract_links()`** (1.2)：多类型链接提取
+  （Uri/Goto/Named/Launch/GotoR）。Link annot 的 `/A` action 和 `/Dest`
+  都覆盖；dest 数组 `/XYZ` 解析为目标页+点。corpus 146/150 与 fitz 一致
+  （4 个差异为 ObjStm 压缩 annot 引用，pre-existing 限制）。
+
+- **`span["flags"]` 格式探测** (1.3)：fitz bitmask
+  （italic=2, serif=4, mono=8, bold=16）。从 `/FontDescriptor /Flags`
+  + 名称启发式推断（Times/Courier/NimbusRom/NimbusMono/CM* 等）。
+  **限制**：当前是页级字体选择（per-page font），所有 span 继承同一
+  字体的 flags；per-span 需要把 `font_map` 下沉到 `cluster_chars`，
+  留到后续版本。
+
+- **`doc.get_toc()` outline 提取** (1.4)：DFS 遍历 `/Outlines` 字典树，
+  周期安全（visited-set）。Title 支持间接引用 + UTF-16BE。Named dest
+  通过 `/Names /Dests` Name Tree（PDF §7.9.6）解析为目标页；显式数组
+  dest 的 `/XYZ` 解析为 `to_point`。
+  - `get_toc(simple=True)` → `[[level, title, page], ...]`（1-based 页码）
+  - `get_toc(simple=False)` → 富 dict（kind/uri/to_point/name）
+
+- **`flashpdf` CLI** (1.5)：基于 click，pip 安装自动注册。
+  - `flashpdf extract <pdf...>` — text/dict/blocks 模式，`--pages 0,1,5-8`
+    子集，`--output-dir` 批量，Windows glob 展开
+  - `flashpdf info <pdf>` — JSON 元数据 + 页统计
+  - `flashpdf toc <pdf>` — 树状缩进或富 JSON
+
+### Verification
+
+- 77/77 Rust 核心 unit tests 过；11/11 CLI smoke tests 过
+- PyMuPDF 165-PDF bug-regression corpus：0% 失败率，速度 vs 0.3.2 无回退
+- TOC vs fitz 在 `2604.11578v1.pdf` 上 25/25 完全一致（level/title/page）
+- `cargo fmt --all --check && cargo clippy -- -D warnings` 干净
+
+### Breaking Changes
+
+无。所有新 API 与 `extract()` / `extract_many()` / `open()` 并行加入。
+
+---
+
 ## [0.3.2] - 2026-06-26
 
 ### Fixed

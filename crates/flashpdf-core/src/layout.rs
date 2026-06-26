@@ -20,13 +20,19 @@ const BLOCK_GAP_FACTOR: f64 = 1.5;
 /// carries its own font size (from the Tf operator at emit time); the global
 /// `font_size` param is a page-level fallback used for thresholds.
 /// Output: hierarchical TextBlock → TextLine → TextSpan structure.
-pub fn cluster_chars(chars: &[CharInfo], font: &str, font_size: f64, color: u32) -> Vec<TextBlock> {
+pub fn cluster_chars(
+    chars: &[CharInfo],
+    font: &str,
+    font_size: f64,
+    color: u32,
+    font_flags: u32,
+) -> Vec<TextBlock> {
     if chars.is_empty() {
         return Vec::new();
     }
 
     // Step 0: Build spans first (before column detection)
-    let spans = build_spans(chars, font, font_size, color);
+    let spans = build_spans(chars, font, font_size, color, font_flags);
 
     // Step 1: Detect columns at the span level
     let columns = detect_columns_from_spans(&spans);
@@ -118,7 +124,13 @@ fn detect_columns_from_spans(spans: &[TextSpan]) -> Vec<Vec<TextSpan>> {
 /// Build spans from consecutive characters with similar position.
 /// `font_size` is the page-level size used for threshold basis (matches
 /// historical behavior); per-char sizes remain available on CharInfo.
-fn build_spans(chars: &[CharInfo], font: &str, font_size: f64, color: u32) -> Vec<TextSpan> {
+fn build_spans(
+    chars: &[CharInfo],
+    font: &str,
+    font_size: f64,
+    color: u32,
+    font_flags: u32,
+) -> Vec<TextSpan> {
     if chars.is_empty() {
         return Vec::new();
     }
@@ -144,17 +156,23 @@ fn build_spans(chars: &[CharInfo], font: &str, font_size: f64, color: u32) -> Ve
             current_chars.push(curr.clone());
         } else {
             // Flush current span and start new one
-            spans.push(make_span(current_chars, font, font_size, color));
+            spans.push(make_span(current_chars, font, font_size, color, font_flags));
             current_chars = SmallVec::new();
             current_chars.push(curr.clone());
         }
     }
 
-    spans.push(make_span(current_chars, font, font_size, color));
+    spans.push(make_span(current_chars, font, font_size, color, font_flags));
     spans
 }
 
-fn make_span(chars: SmallVec<[CharInfo; 16]>, font: &str, font_size: f64, color: u32) -> TextSpan {
+fn make_span(
+    chars: SmallVec<[CharInfo; 16]>,
+    font: &str,
+    font_size: f64,
+    color: u32,
+    font_flags: u32,
+) -> TextSpan {
     let text: String = chars.iter().map(|c| c.c).collect();
     let bbox = compute_bbox(&chars);
     TextSpan {
@@ -164,6 +182,7 @@ fn make_span(chars: SmallVec<[CharInfo; 16]>, font: &str, font_size: f64, color:
         color,
         bbox,
         chars: chars.into_vec(),
+        flags: font_flags,
     }
 }
 
@@ -386,6 +405,7 @@ fn merge_two_lines(line1: &TextLine, line2: &TextLine) -> TextLine {
                 color: span.color,
                 bbox: span.bbox,
                 chars: span.chars.clone(),
+                flags: span.flags,
             });
         } else {
             merged_spans.push(span.clone());
@@ -703,6 +723,7 @@ mod tests {
             color: 0,
             bbox: [x0, y0, x1, y1],
             chars: Vec::new(),
+            flags: 0,
         };
         let line = TextLine {
             bbox: [x0, y0, x1, y1],
@@ -770,7 +791,7 @@ mod tests {
             make_char('H', 100.0, 700.0, 7.0, 12.0),
             make_char('i', 107.0, 700.0, 5.0, 12.0),
         ];
-        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0);
+        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0, 0);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].lines.len(), 1);
         assert_eq!(blocks[0].lines[0].spans.len(), 1);
@@ -785,7 +806,7 @@ mod tests {
             make_char('A', 100.0, 700.0, 7.0, 12.0),
             make_char('B', 100.0, 688.0, 7.0, 12.0),
         ];
-        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0);
+        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0, 0);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].lines.len(), 2);
     }
@@ -797,14 +818,14 @@ mod tests {
             // Large vertical gap → new block
             make_char('B', 100.0, 650.0, 7.0, 12.0),
         ];
-        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0);
+        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0, 0);
         assert_eq!(blocks.len(), 2);
     }
 
     #[test]
     fn test_empty_input() {
         let chars = vec![];
-        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0);
+        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0, 0);
         assert!(blocks.is_empty());
     }
 
@@ -818,7 +839,7 @@ mod tests {
             make_char('W', 150.0, 700.0, 8.0, 12.0),
             make_char('o', 158.0, 700.0, 6.0, 12.0),
         ];
-        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0);
+        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0, 0);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].lines.len(), 1);
         assert_eq!(blocks[0].lines[0].spans.len(), 2);
@@ -850,7 +871,7 @@ mod tests {
             chars.push(make_char('h', 317.0, y, 5.0, 12.0));
             chars.push(make_char('t', 322.0, y, 5.0, 12.0));
         }
-        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0);
+        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0, 0);
         // Collect all span text
         let mut all_text = String::new();
         for block in &blocks {
@@ -895,7 +916,7 @@ mod tests {
             make_char('v', 126.0, 515.0, 6.0, 12.0),
             make_char('e', 132.0, 515.0, 5.0, 12.0),
         ];
-        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0);
+        let blocks = cluster_chars(&chars, "Helvetica", 12.0, 0, 0);
         assert_eq!(blocks.len(), 1);
         // Hyphenation merge disabled: lines stay separate.
         assert_eq!(blocks[0].lines.len(), 2);

@@ -40,6 +40,10 @@ pub struct TextSpan {
     pub color: u32,
     pub bbox: [f64; 4],
     pub chars: Vec<CharInfo>,
+    /// fitz-compatible flag bitmask (italic=2, serif=4, mono=8, bold=16).
+    /// Populated from FontInfo.flags of the span's font. 0 when the font
+    /// couldn't be classified (e.g. no /FontDescriptor and an unknown name).
+    pub flags: u32,
 }
 
 /// A line of text (one or more vertically-aligned spans).
