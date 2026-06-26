@@ -26,6 +26,12 @@ classifiers = [
     "Programming Language :: Rust",
     "Topic :: Text Processing :: General",
 ]
+dependencies = [
+    "click>=8.0",
+]
+
+[project.scripts]
+flashpdf = "flashpdf.cli:main"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

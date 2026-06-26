@@ -47,6 +47,27 @@ for path, blocks, images in flashpdf.extract_many(
     ...
 ```
 
+### 命令行（`flashpdf`）
+
+```bash
+# 提取纯文本（默认模式，stdout）
+flashpdf extract paper.pdf
+
+# fitz 风格 JSON，并写入文件
+flashpdf extract paper.pdf --mode dict --pages 0,1,5-8 --output-dir out/
+
+# 元数据 + 页数概览
+flashpdf info paper.pdf
+flashpdf info paper.pdf --per-page      # 每页 is_scanned / 块数
+
+# 目录（outline / TOC）
+flashpdf toc paper.pdf                  # 树状缩进格式
+flashpdf toc paper.pdf --rich           # 完整 JSON（含 kind/uri/to_point）
+```
+
+`flashpdf` 命令随 `pip install` 自动注册（基于 click，[project.scripts] 入口）。
+
+
 ## 特性
 
 - **极致性能**：mmap 零拷贝、memchr SIMD 扫描、rayon 页级并行
