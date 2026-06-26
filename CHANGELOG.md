@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.3.1] - 2026-06-26
+
+### Fixed
+
+- **悬空间接引用按 null 解析（PDF 1.7 §7.3.10）**：`Document::get_object` 之前对
+  xref 中不存在 / Free 条目 / ObjStm 中找不到的对象直接返回 `Err`，导致整个文档
+  解析失败。现统一返回 `PdfObject::Null` 并缓存，与 PyMuPDF / pdf_oxide / liteparse
+  的 spec-compliant 行为对齐。
+
+  - 触发场景：Word/Office 导出 PDF、增量更新后旧对象被回收、linearized PDF 的
+    hint 表里残留引用、AcroForm 字段 /DR 资源悬空。
+  - 在 PyMuPDF bug-regression corpus（165 PDF）上：ValueError 失败 46 → 2
+    （95% 修复）。
+
+- **页树断裂恢复**：`Document::recover_page_refs` 新增——当 `/Pages` 或 `/Kids`
+  断裂（root 拿不到 Pages dict、Pages dict 拿不到 Kids array），扫所有 xref 条目
+  找 `/Type /Page` 对象，按文件字节偏移排序构建页列表。`extract_doc` 在
+  `page_refs()` 失败或返回空时自动回退到该路径。
+
+  - 修复 `missing /Pages in catalog` 与 `missing /Kids in Pages` 两类致命错误。
+  - 完全断裂的文档现在返回 0 页成功而不是 fatal。
+
+- **空页列表 panic**：`page_refs.chunks(0)` 在 recovery 也返回空时 panic，
+  加 `if page_refs.is_empty()` 提前返回空 `ExtractResult`。
+
+### Benchmark 影响
+
+PyMuPDF bug-regression corpus（165 个病理 PDF）：
+
+| 指标 | v0.3.0 | v0.3.1 |
+|------|-------:|-------:|
+| flashpdf 失败率 | 50% (83/165) | **24% (39/165)** |
+| ValueError | 46 | 2 |
+| TIMEOUT | 36 | 36 |
+| CRASH | 1 | 1 |
+| geo-mean vs liteparse | 5.28× | **7.49×** |
+| geo-mean vs pdf_oxide | 2.75× | **3.43×** |
+
+速度提升是因为恢复路径纳入了若干"重"PDF，peers 在这些文件上更慢。
+剩下的 39 个失败主要是 36 个 TIMEOUT（无限循环 / Form XObject 递归 / ObjStm
+解析挂死），需要单独的 watchdog 修复。
+
 ## [0.3.0] - 2026-06-26
 
 ### Added

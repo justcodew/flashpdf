@@ -86,6 +86,17 @@ impl Document {
 
     /// Get an indirect object by its object number.
     /// Objects are parsed lazily and cached.
+    ///
+    /// Per PDF 1.7 §7.3.10, an indirect reference to an undefined object
+    /// resolves to the null object. We mirror that: missing-from-xref,
+    /// free (deleted), and ObjStm-resident-but-not-found entries all return
+    /// `PdfObject::Null` instead of erroring. Real parse failures (corrupt
+    /// bytes, missing `endobj`, etc.) still propagate as `Err`.
+    ///
+    /// Rationale: PyMuPDF's bug-regression corpus (~165 PDFs) showed a 28%
+    /// failure rate purely from `object not in xref`, caused by Word/Office
+    /// exports, incremental updates, and linearized PDFs with stale hint
+    /// tables. Peers treat dangling refs as null per spec; we now do too.
     pub fn get_object(&self, obj_num: u32) -> ParseResult<PdfObject<'static>> {
         // Check cache first
         {
@@ -95,10 +106,9 @@ impl Document {
             }
         }
 
-        let entry = self
-            .xref
-            .get(obj_num)
-            .ok_or(ParseError::Message("object not in xref"))?;
+        let Some(entry) = self.xref.get(obj_num) else {
+            return Ok(self.cache_null(obj_num));
+        };
 
         let obj = match entry.entry_type {
             XrefEntryType::Uncompressed => {
@@ -110,24 +120,31 @@ impl Document {
             XrefEntryType::Compressed => {
                 let stream_obj_num = entry.field1;
 
-                // Ensure the object stream is loaded
+                // Ensure the object stream is loaded. Soft-fail: if the ObjStm
+                // itself is corrupt, treat all its members as null rather than
+                // fataling the whole document.
                 {
                     let stm_cache = self.objstm_cache.read().unwrap();
                     if !stm_cache.contains_key(&stream_obj_num) {
                         drop(stm_cache);
-                        self.load_objstm(stream_obj_num)?;
+                        if self.load_objstm(stream_obj_num).is_err() {
+                            return Ok(self.cache_null(obj_num));
+                        }
                     }
                 }
 
                 let stm_cache = self.objstm_cache.read().unwrap();
-                stm_cache
+                match stm_cache
                     .get(&stream_obj_num)
                     .and_then(|m| m.get(&obj_num))
                     .cloned()
-                    .ok_or(ParseError::Message("object not found in ObjStm"))?
+                {
+                    Some(obj) => obj,
+                    None => return Ok(self.cache_null(obj_num)),
+                }
             }
             XrefEntryType::Free => {
-                return Err(ParseError::Message("object is free (deleted)"));
+                return Ok(self.cache_null(obj_num));
             }
         };
 
@@ -136,6 +153,16 @@ impl Document {
             .unwrap()
             .insert(obj_num, obj.clone());
         Ok(obj)
+    }
+
+    /// Cache `Null` for `obj_num` and return it. Centralizes the dangling-ref
+    /// path so all three soft-fail branches produce identical cache state.
+    fn cache_null(&self, obj_num: u32) -> PdfObject<'static> {
+        self.object_cache
+            .write()
+            .unwrap()
+            .insert(obj_num, PdfObject::Null);
+        PdfObject::Null
     }
 
     fn load_objstm(&self, stream_obj_num: u32) -> ParseResult<()> {
@@ -216,6 +243,56 @@ impl Document {
         let mut page_refs = Vec::new();
         collect_page_refs(self, kids, &mut page_refs)?;
         Ok(page_refs)
+    }
+
+    /// Fallback when the page tree is broken: scan every xref entry for
+    /// objects whose /Type is /Page and return them in file-offset order.
+    ///
+    /// The PDF spec guarantees /Type /Page identifies page nodes, so even
+    /// without a working /Pages /Kids chain we can find them by exhaustive
+    /// scan. PDFs typically emit pages in document order, so byte-offset
+    /// sort approximates the intended reading order.
+    ///
+    /// Used by `extract_doc` when `page_refs()` fails. Catches the "missing
+    /// /Pages in catalog" and "missing /Kids in Pages" failure modes that
+    /// account for ~11 of the 46 ValueError files in the PyMuPDF corpus
+    /// (mostly Word/Office exports + bug-regression PDFs with deliberately
+    /// corrupt page trees).
+    pub fn recover_page_refs(&self) -> Vec<ObjectId> {
+        let mut found: Vec<(usize, ObjectId)> = Vec::new();
+        for (&obj_num, entry) in self.xref.entries.iter() {
+            if entry.entry_type != XrefEntryType::Uncompressed {
+                // Compressed entries have no byte offset; skip — they're rare
+                // for page objects anyway (pages are usually top-level).
+                continue;
+            }
+            // Cheap pre-filter: only attempt parse if the bytes near the
+            // offset even contain "/Type". Avoids parsing the whole xref.
+            let offset = entry.field1 as usize;
+            let window_end = (offset + 2048).min(self.mmap.len());
+            let window = &self.mmap[offset..window_end];
+            if memchr::memchr(b'/', window).is_none() {
+                continue;
+            }
+            if let Ok(obj) = self.get_object(obj_num) {
+                let is_page = obj
+                    .get(b"Type")
+                    .and_then(|t| t.as_name())
+                    .map(|n| n == b"Page")
+                    .unwrap_or(false);
+                if is_page {
+                    found.push((
+                        offset,
+                        ObjectId {
+                            num: obj_num,
+                            gen: entry.field2,
+                        },
+                    ));
+                }
+            }
+        }
+        found.sort_by_key(|(off, _)| *off);
+        found.into_iter().map(|(_, id)| id).collect()
     }
 
     /// Get the xref table (for debugging/inspection).

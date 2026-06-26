@@ -136,10 +136,23 @@ pub fn extract(path: &str, options: &ExtractOptions) -> ParseResult<ExtractResul
 
 /// Extract from an already-opened Document.
 pub fn extract_doc(doc: &Document, options: &ExtractOptions) -> ParseResult<ExtractResult> {
-    let page_refs = doc.page_refs()?;
+    // Try the spec-compliant /Pages /Kids walk first. If the page tree is
+    // broken (dangling /Pages ref, missing /Kids — common in Word/Office
+    // exports and bug-regression PDFs), fall back to scanning every xref
+    // entry for /Type /Page objects. Recovery never fails — if it finds
+    // zero pages, we proceed with an empty doc rather than fataling.
+    let page_refs = match doc.page_refs() {
+        Ok(refs) if !refs.is_empty() => refs,
+        _ => doc.recover_page_refs(),
+    };
     let mmap_data: &[u8] = unsafe { std::mem::transmute(doc.mmap_slice()) };
 
-    // Auto-batch: if page count > batch_size and batch_size > 0, process in batches
+    // Auto-batch: if page count > batch_size and batch_size > 0, process in batches.
+    // Guard against page_refs.len()==0 — both recovery paths can return empty
+    // for utterly broken PDFs, and `chunks(0)` panics.
+    if page_refs.is_empty() {
+        return Ok(ExtractResult { pages: Vec::new() });
+    }
     let batch_size = if options.batch_size > 0 && page_refs.len() > options.batch_size {
         options.batch_size
     } else {
