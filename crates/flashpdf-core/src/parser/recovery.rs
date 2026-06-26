@@ -285,8 +285,10 @@ fn parse_minimal_dict(data: &[u8]) -> Option<PdfObj<'_>> {
                 PdfObj::_Other
             }
         } else {
-            // Skip unknown value
-            skip_value(&data[pos..]);
+            // Skip unknown value. Without advancing pos, parse_minimal_dict
+            // infinite-loops on `[`, `(`, `<`, `<<` — this was the root cause
+            // of every open()-phase hang on the PyMuPDF corpus (36 PDFs).
+            pos += skip_value(&data[pos..]);
             PdfObj::_Other
         };
 
@@ -296,10 +298,140 @@ fn parse_minimal_dict(data: &[u8]) -> Option<PdfObj<'_>> {
     Some(PdfObj::Dict(entries))
 }
 
-fn skip_value(data: &[u8]) {
-    // Simple skip: just advance until whitespace/delimiter
-    // This is intentionally simple for recovery
-    let _ = data;
+/// Skip a PDF value at the start of `data`, returning bytes consumed.
+/// Handles strings, hex strings, dicts, arrays, and names — anything that
+/// could appear as a dict value. Number/keyword/REF tokens fall through to
+/// the delimiter-bounded scan.
+fn skip_value(data: &[u8]) -> usize {
+    if data.is_empty() {
+        return 0;
+    }
+    match data[0] {
+        b'(' => skip_paren_string(data),
+        b'<' if data.len() > 1 && data[1] == b'<' => skip_dict(data),
+        b'<' => skip_hex_string(data),
+        b'[' => skip_array(data),
+        b'/' => skip_name(data),
+        _ => {
+            // number / keyword / REF — read until delimiter
+            let mut i = 0;
+            while i < data.len()
+                && !matches!(
+                    data[i],
+                    b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>' | b'[' | b'(' | b'<'
+                )
+            {
+                i += 1;
+            }
+            i
+        }
+    }
+}
+
+/// Skip `( ... )` string, respecting nested parens and `\` escapes.
+fn skip_paren_string(data: &[u8]) -> usize {
+    let mut i = 1;
+    let mut depth: i32 = 1;
+    while i < data.len() && depth > 0 {
+        match data[i] {
+            b'\\' => i += 2,
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+/// Skip `< ... >` hex string. First byte is `<`.
+fn skip_hex_string(data: &[u8]) -> usize {
+    let mut i = 1;
+    while i < data.len() && data[i] != b'>' {
+        i += 1;
+    }
+    if i < data.len() {
+        i + 1
+    } else {
+        i
+    }
+}
+
+/// Skip `<< ... >>` dict, balanced. Handles nested dicts, hex strings, and
+/// paren strings inside.
+fn skip_dict(data: &[u8]) -> usize {
+    let mut i = 2;
+    let mut depth: i32 = 1;
+    while i < data.len() && depth > 0 {
+        match data[i] {
+            b'<' => {
+                if i + 1 < data.len() && data[i + 1] == b'<' {
+                    depth += 1;
+                    i += 2;
+                } else {
+                    i = (i + skip_hex_string(&data[i..])).max(i + 1);
+                }
+            }
+            b'>' => {
+                if i + 1 < data.len() && data[i + 1] == b'>' {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            b'(' => i += skip_paren_string(&data[i..]),
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+/// Skip `[ ... ]` array, balanced. Handles nested arrays, dicts, strings.
+fn skip_array(data: &[u8]) -> usize {
+    let mut i = 1;
+    let mut depth: i32 = 1;
+    while i < data.len() && depth > 0 {
+        match data[i] {
+            b'[' => {
+                depth += 1;
+                i += 1;
+            }
+            b']' => {
+                depth -= 1;
+                i += 1;
+            }
+            b'(' => i += skip_paren_string(&data[i..]),
+            b'<' => {
+                if i + 1 < data.len() && data[i + 1] == b'<' {
+                    i += skip_dict(&data[i..]);
+                } else {
+                    i += skip_hex_string(&data[i..]);
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+/// Skip `/Name`. First byte is `/`.
+fn skip_name(data: &[u8]) -> usize {
+    let mut i = 1;
+    while i < data.len()
+        && !matches!(
+            data[i],
+            b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>' | b'[' | b'(' | b'<'
+        )
+    {
+        i += 1;
+    }
+    i
 }
 
 fn is_catalog(dict: &[(&[u8], PdfObj<'_>)]) -> bool {

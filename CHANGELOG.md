@@ -4,6 +4,21 @@
 
 ### Fixed
 
+- **xref recovery 无限循环（recovery.rs `skip_value` no-op bug）**：
+  `recover_xref_by_scan` 调用的 `parse_minimal_dict` 在遇到 dict value 是
+  `[` 数组 / `(` 字符串 / `<` hex string / `<<` 嵌套 dict 时调用 `skip_value`
+  跳过，但 `skip_value` 是个 `let _ = data;` 的空函数——`pos` 永远不前进。
+  下一次循环的 "skip unknown token" 把 `[` 当成停止字符，循环体一次都不执行，
+  形成无限循环。任何 catalog 里有数组字段（/Names /Outlines 等）的 PDF
+  open() 阶段就挂死。
+
+  重写 `skip_value` + 5 个 helper（`skip_paren_string` / `skip_hex_string` /
+  `skip_dict` / `skip_array` / `skip_name`），返回消费字节数；调用方
+  `pos += skip_value(...)`。
+
+  - 修复 PyMuPDF corpus 上 **全部 36 个 open() 阶段 TIMEOUT**（100%）。
+  - 这些文件之前 30s SIGKILL，现在大多 < 10ms 完成。
+
 - **悬空间接引用按 null 解析（PDF 1.7 §7.3.10）**：`Document::get_object` 之前对
   xref 中不存在 / Free 条目 / ObjStm 中找不到的对象直接返回 `Err`，导致整个文档
   解析失败。现统一返回 `PdfObject::Null` 并缓存，与 PyMuPDF / pdf_oxide / liteparse
@@ -11,8 +26,7 @@
 
   - 触发场景：Word/Office 导出 PDF、增量更新后旧对象被回收、linearized PDF 的
     hint 表里残留引用、AcroForm 字段 /DR 资源悬空。
-  - 在 PyMuPDF bug-regression corpus（165 PDF）上：ValueError 失败 46 → 2
-    （95% 修复）。
+  - ValueError 失败 46 → 2（95% 修复）。
 
 - **页树断裂恢复**：`Document::recover_page_refs` 新增——当 `/Pages` 或 `/Kids`
   断裂（root 拿不到 Pages dict、Pages dict 拿不到 Kids array），扫所有 xref 条目
@@ -31,16 +45,20 @@ PyMuPDF bug-regression corpus（165 个病理 PDF）：
 
 | 指标 | v0.3.0 | v0.3.1 |
 |------|-------:|-------:|
-| flashpdf 失败率 | 50% (83/165) | **24% (39/165)** |
-| ValueError | 46 | 2 |
-| TIMEOUT | 36 | 36 |
+| flashpdf 失败率 | 50% (83/165) | **2% (4/165)** |
+| ValueError | 46 | 3 |
+| TIMEOUT | 36 | **0** |
 | CRASH | 1 | 1 |
-| geo-mean vs liteparse | 5.28× | **7.49×** |
-| geo-mean vs pdf_oxide | 2.75× | **3.43×** |
+| geo-mean vs liteparse | 5.28× | **8.36×** |
+| geo-mean vs pdf_oxide | 2.75× | **4.08×** |
 
+flashpdf 失败率已与 peers（liteparse / pdf_oxide 各 1%）同一量级，速度优势
+普遍成立——按文件大小分桶 speedup 区间 1.86× ~ 9.62×。
 速度提升是因为恢复路径纳入了若干"重"PDF，peers 在这些文件上更慢。
-剩下的 39 个失败主要是 36 个 TIMEOUT（无限循环 / Form XObject 递归 / ObjStm
-解析挂死），需要单独的 watchdog 修复。
+
+剩下的 4 个失败：3 个 ValueError（含 `cython.pdf` 的 ObjStm 压缩 catalog，
+recovery 看不见；2 个 tokenizer-level "invalid number format" / "expected 'obj'
+keyword"），1 个 CRASH（`test_3072.pdf`，单一文件）。
 
 ## [0.3.0] - 2026-06-26
 
