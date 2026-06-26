@@ -358,11 +358,11 @@ fn extract_single_page(
     // practice because it sits above typical body text (9-10pt) and below
     // title text (12-14pt), giving balanced thresholds. Per-char sizes
     // remain available on CharInfo.size for future per-char clustering.
-    let font_name = font_map
+    let (font_name, font_flags) = font_map
         .iter()
         .next()
-        .map(|(name, _info)| name.clone())
-        .unwrap_or_else(|| "Helvetica".to_string());
+        .map(|(name, info)| (name.clone(), info.flags))
+        .unwrap_or_else(|| ("Helvetica".to_string(), 0));
 
     // Scan content stream with font-aware decoding + Form XObject recursion
     let scan_result = crate::parser::content_stream::scan_content_stream_full(
@@ -396,7 +396,7 @@ fn extract_single_page(
     // Cluster body chars and sort into visual reading order (recursive XY-cut).
     // The diagnostics variant returns the count of blocks dropped by the
     // out-of-page margin filter.
-    let blocks = cluster_chars(&body_chars, &font_name, font_size, 0);
+    let blocks = cluster_chars(&body_chars, &font_name, font_size, 0, font_flags);
     let rect = page_rect(&page, &blocks);
     let (mut blocks, out_of_page_dropped) =
         crate::layout::reading_order_sort_with_diagnostics(blocks, rect);
@@ -406,7 +406,7 @@ fn extract_single_page(
     // preserved — this matches the documented behavior that rotated text
     // is not woven into the XY-cut output.
     if !rot_chars.is_empty() {
-        let mut rot_blocks = cluster_chars(&rot_chars, &font_name, font_size, 0);
+        let mut rot_blocks = cluster_chars(&rot_chars, &font_name, font_size, 0, font_flags);
         blocks.append(&mut rot_blocks);
     }
 
@@ -597,6 +597,7 @@ mod tests {
                     color: 0,
                     bbox: [0.0, 0.0, 100.0, 20.0],
                     chars: vec![],
+                    flags: 0,
                 }],
             }],
         }

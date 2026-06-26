@@ -224,6 +224,7 @@ fn render_extract_result<'py>(
                     span_dict.set_item("font", &span.font)?;
                     span_dict.set_item("size", span.size)?;
                     span_dict.set_item("color", span.color)?;
+                    span_dict.set_item("flags", span.flags)?;
                     spans_list.append(span_dict)?;
                 }
                 line_dict.set_item("spans", spans_list)?;
@@ -545,8 +546,8 @@ impl PyPage {
                     span_dict.set_item("font", &span.font)?;
                     span_dict.set_item("size", span.size)?;
                     span_dict.set_item("color", span.color)?;
-                    // fitz flag bits (italic/bold/serif/...). Stub: 0 for now.
-                    span_dict.set_item("flags", 0)?;
+                    // fitz flag bits: italic=2, serif=4, mono=8, bold=16.
+                    span_dict.set_item("flags", span.flags)?;
                     spans_list.append(span_dict)?;
                 }
                 line_dict.set_item("spans", spans_list)?;
