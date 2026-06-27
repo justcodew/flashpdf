@@ -78,14 +78,15 @@ flashpdf toc paper.pdf --rich           # 完整 JSON（含 kind/uri/to_point）
 
 ## 适用范围
 
-flashpdf 是**纯数据提取工具**——不做渲染、不做 OCR、不做编辑。
+flashpdf 是**纯数据提取 + 可选渲染工具**——不做 OCR、不做编辑、不做 AES-256。
 
 - ✅ 文本提取（blocks/lines/spans，含 bbox/字体/字号/颜色）
 - ✅ 嵌入图像提取（`Do` 引用的位图对象，**不是页面截图**）
-- ❌ 页面渲染（`get_pixmap()` 等价物）、矢量图光栅化、OCR、PDF 编辑
+- ✅ 页面渲染（`render` feature + PDFium binary，`page.get_pixmap()`）
+- ❌ 矢量图光栅化、OCR、PDF 编辑、AES-256 加密、字体度量扩展字段
 
-需要渲染或 OCR 请用 PyMuPDF / ritz / GoMuPDF 等带 MuPDF 引擎的库——渲染需要完整的
-PDF interpreter + 光栅化器，与 flashpdf "纯解析、零渲染" 的设计目标相悖。
+完整短板清单（加密限制、字段精度、未测场景等）见 **[LIMITATIONS.md](docs/LIMITATIONS.md)**。
+渲染基准和与 fitz / pypdfium2 的对比见 **[BENCHMARK_RENDER.md](docs/BENCHMARK_RENDER.md)**。
 
 ## 基准
 
@@ -171,7 +172,7 @@ fitz 风格入口。open() 时一次性并行提取所有页，后续 `doc[i]` /
     "bbox": (x0, y0, x1, y1),
     "lines": [{"bbox": ..., "spans": [
         {"bbox": ..., "text": "...", "font": "Helvetica",
-         "size": 12.0, "color": 0, "flags": 0}   # flags 暂为 stub
+         "size": 12.0, "color": 0, "flags": 0}   # flags: 名字启发式 italic/serif/mono/bold
     ]}]
 }
 
@@ -186,8 +187,9 @@ fitz 风格入口。open() 时一次性并行提取所有页，后续 `doc[i]` /
 ```
 
 **fitz 兼容性**：`open()` / `doc[i]` / `get_text("dict"|"text"|"blocks")` / `page.rect` /
-`page.get_images()` 全部对齐。不支持 `get_pixmap()` 及编辑类 API（设计目标）。`span.flags`
-暂为 `0` stub，不带 italic/bold 探测；`ascender/descender/origin` 等 fitz 扩展字段不输出。
+`page.get_images()` 全部对齐。不支持编辑类 API（设计目标，详见 [LIMITATIONS.md](docs/LIMITATIONS.md)）。
+`span.flags` 通过字体名启发式检测 italic/serif/mono/bold（不读 `/FontDescriptor /Flags`，
+精度不如 fitz）；`ascender/descender/origin` 等 fitz 扩展字段不输出。
 
 **何时用哪个**：交互式 / 逐页随机访问 → `open()`；批量向量化 → `extract_many(file_parallel=True)`；
 一次性单文件 → `extract()`。
