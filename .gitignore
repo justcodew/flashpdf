@@ -35,3 +35,8 @@ __pycache__/
 # PDFium dynamic library (render feature). Downloaded per-developer,
 # never checked in. See docs/RENDERING.md.
 pdfium-bin/
+
+# benchmark scratch output (kept in tree, ignored by git)
+tests/out/*.jsonl
+tests/out/*.log
+tests/out/analysis.log
