@@ -31,3 +31,7 @@ comparison_results.json
 .venv/
 __pycache__/
 *.pyc
+
+# PDFium dynamic library (render feature). Downloaded per-developer,
+# never checked in. See docs/RENDERING.md.
+pdfium-bin/

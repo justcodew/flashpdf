@@ -381,6 +381,11 @@ fn render_extract_result<'py>(
 #[pyclass(name = "Document")]
 pub struct PyDocument {
     pages: Vec<Arc<flashpdf_core::PageResult>>,
+    /// Source file path. Threaded through to `PyPage` so that
+    /// `page.get_pixmap()` (render feature) can re-open the file with PDFium.
+    /// PDFium is an independent PDF interpreter and does not share flashpdf's
+    /// internal parser state.
+    path: std::path::PathBuf,
     metadata: flashpdf_core::DocumentMetadata,
     /// PDF version string from `%PDF-X.Y` header (e.g. `"1.7"`), or `None`
     /// when the header is missing/malformed. Surfaced as part of
@@ -429,6 +434,7 @@ impl PyDocument {
         let page = PyPage {
             page_idx: i as usize,
             page: Arc::clone(&self.pages[i as usize]),
+            path: self.path.clone(),
         };
         Py::new(py, page)
     }
@@ -558,6 +564,7 @@ impl PyDocument {
 
         Ok(Self {
             pages,
+            path: std::path::PathBuf::from(path),
             metadata: result.metadata,
             pdf_version: result.pdf_version,
             is_encrypted: result.is_encrypted,
@@ -588,6 +595,10 @@ pub struct PyPage {
     /// Arc-shared with the parent Document. Cloning a Page (via `doc[i]`)
     /// is a single atomic refcount bump — no deep copy of blocks/images.
     page: Arc<flashpdf_core::PageResult>,
+    /// Source file path (cloned from PyDocument). Used by `get_pixmap()`
+    /// under the `render` feature to re-open the file with PDFium.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
+    path: std::path::PathBuf,
 }
 
 #[pymethods]
@@ -625,6 +636,52 @@ impl PyPage {
             list.append(link_to_dict(py, link)?)?;
         }
         Ok(list)
+    }
+
+    /// Render this page to PNG bytes via PDFium. Requires both:
+    ///   1. The `render` Cargo feature was enabled when the wheel was built.
+    ///   2. A PDFium dynamic library is reachable at runtime
+    ///      (`PDFIUM_PATH` env or `./pdfium-bin/`). See `docs/RENDERING.md`.
+    ///
+    /// - `dpi` (default 150): output resolution. 72 DPI = PDF native size.
+    ///   Higher = sharper but larger PNGs.
+    /// - `output` (optional): if given, also write the PNG to this file path.
+    ///
+    /// Returns: PNG file bytes.
+    ///
+    /// Note: PDFium is an independent PDF interpreter — it does not share
+    /// flashpdf's parsed state, so each call re-opens and re-parses the file.
+    /// For bulk rendering, prefer calling once per page rather than once per
+    /// pixel-level tweak.
+    #[pyo3(signature = (dpi=150, output=None))]
+    fn get_pixmap<'py>(
+        &self,
+        py: Python<'py>,
+        dpi: u32,
+        output: Option<&str>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        #[cfg(not(feature = "render"))]
+        {
+            let _ = (py, dpi, output);
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "page.get_pixmap() requires the 'render' Cargo feature. \
+                 Reinstall the wheel with the render build: \
+                 maturin develop --release --features render",
+            ));
+        }
+        #[cfg(feature = "render")]
+        {
+            let png = flashpdf_core::render::render_page_to_png(
+                &self.path.to_string_lossy(),
+                self.page_idx,
+                dpi,
+            )
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+            if let Some(p) = output {
+                std::fs::write(p, &png).map_err(pyo3::exceptions::PyIOError::new_err)?;
+            }
+            Ok(pyo3::types::PyBytes::new(py, &png))
+        }
     }
 
     #[getter]

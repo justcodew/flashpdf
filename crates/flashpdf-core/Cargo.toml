@@ -18,6 +18,8 @@ cbc = "0.1"
 sha2 = "0.10"
 tracing = "0.1"
 zune-png = { version = "0.4", optional = true }
+pdfium-render = { version = "0.9", default-features = false, optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -30,3 +32,8 @@ harness = false
 default = []
 gpu = []
 debug_columns = []
+# Optional page rendering via PDFium. Requires a PDFium dynamic library
+# at runtime (PDFIUM_PATH env or ./pdfium-bin/). See docs/RENDERING.md.
+# Uses pdfium-render's default-replacement feature set: we disable its default
+# `image_latest` (only `jpeg` encoder) and pull `image` ourselves with `png`.
+render = ["dep:pdfium-render", "dep:image", "pdfium-render/thread_safe", "pdfium-render/pdfium_latest"]

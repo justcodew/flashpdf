@@ -20,6 +20,9 @@ pub mod outline;
 pub mod parser;
 pub mod types;
 
+#[cfg(feature = "render")]
+pub mod render;
+
 pub use document::{decode_pdf_string, Document, DocumentMetadata};
 pub use extract::{extract, extract_doc, extract_many, ExtractOptions, ExtractResult, PageResult};
 pub use font::{build_font_map, parse_cmap, CIDFontInfo, CIDWidthRange, CMap, FontInfo};
