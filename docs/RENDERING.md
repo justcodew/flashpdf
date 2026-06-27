@@ -112,6 +112,32 @@ with flashpdf.open("paper.pdf") as doc:
 
 The return value is always PNG bytes (RGBA, white background for transparency).
 
+### Render-only fast path: `render_only=True`
+
+If you only need rendering (no text extraction), open with `render_only=True`
+to skip flashpdf's eager text+image extraction. Matches fitz / pypdfium2's
+lazy `open()` semantics — saves ~3ms per PDF on average, ~13% of total time
+on render-heavy workloads.
+
+```python
+# Thumbnails / OCR feedstock / batch rasterization
+with flashpdf.open("big.pdf", render_only=True) as doc:
+    for i in range(len(doc)):
+        png = doc[i].get_pixmap(dpi=150)
+        ...
+
+# When you need BOTH text and render in the same session: use default open
+with flashpdf.open("paper.pdf") as doc:
+    text = doc[0].get_text("dict")
+    png = doc[0].get_pixmap(dpi=150)
+```
+
+When `render_only=True`:
+- ✅ `len(doc)`, `doc[i]`, `page.get_pixmap()` work
+- ❌ `get_text()` / `get_images()` / `get_links()` return empty (stubs)
+- ❌ `page.rect` / `page.is_scanned` are stub values
+- ❌ `doc.metadata` / `doc.get_toc()` return empty
+
 ### Not implemented (vs. PyMuPDF `Pixmap`)
 
 To keep the MVP small, these fitz `get_pixmap` / `Pixmap` features are

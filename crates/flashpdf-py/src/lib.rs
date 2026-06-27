@@ -55,9 +55,14 @@ fn set_log_level(level: &str) -> PyResult<()> {
 /// text). Pages are shared with `Arc` internally, so `doc[i]` is O(1) —
 /// no per-access clone of the page's blocks/images.
 #[pyfunction]
-#[pyo3(signature = (path, include_images=true, include_rotated=false))]
-fn open(path: &str, include_images: bool, include_rotated: bool) -> PyResult<PyDocument> {
-    PyDocument::open(path, include_images, include_rotated)
+#[pyo3(signature = (path, include_images=true, include_rotated=false, render_only=false))]
+fn open(
+    path: &str,
+    include_images: bool,
+    include_rotated: bool,
+    render_only: bool,
+) -> PyResult<PyDocument> {
+    PyDocument::open(path, include_images, include_rotated, render_only)
 }
 
 /// Extract text blocks and images from a single PDF file.
@@ -404,9 +409,14 @@ pub struct PyDocument {
 #[pymethods]
 impl PyDocument {
     #[new]
-    #[pyo3(signature = (path, include_images=true, include_rotated=false))]
-    fn new(path: &str, include_images: bool, include_rotated: bool) -> PyResult<Self> {
-        Self::open(path, include_images, include_rotated)
+    #[pyo3(signature = (path, include_images=true, include_rotated=false, render_only=false))]
+    fn new(
+        path: &str,
+        include_images: bool,
+        include_rotated: bool,
+        render_only: bool,
+    ) -> PyResult<Self> {
+        Self::open(path, include_images, include_rotated, render_only)
     }
 
     /// Number of pages. `len(doc)`.
@@ -540,7 +550,49 @@ impl PyDocument {
 }
 
 impl PyDocument {
-    fn open(path: &str, include_images: bool, include_rotated: bool) -> PyResult<Self> {
+    fn open(
+        path: &str,
+        include_images: bool,
+        include_rotated: bool,
+        render_only: bool,
+    ) -> PyResult<Self> {
+        // Render-only fast path: skip text/image extraction entirely.
+        // We still need page count so `doc[i]` works, but PageResults are
+        // empty stubs — text-extraction methods will return empty results,
+        // which is the documented contract for render_only=True.
+        //
+        // Use case: rendering-heavy pipelines (thumbnails, OCR feedstock,
+        // batch rasterization) where paying ~ms/PDF for text extraction
+        // the user never reads is wasted work. Benchmark-fairness win:
+        // matches fitz.open() / pdfium.PdfDocument() lazy semantics.
+        if render_only {
+            let doc = flashpdf_core::Document::open(path)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            let page_count = doc
+                .page_count()
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            let stub = Arc::new(flashpdf_core::PageResult {
+                blocks: Vec::new(),
+                images: Vec::new(),
+                is_scanned: false,
+                rect: [0.0, 0.0, 0.0, 0.0],
+                diagnostics: Default::default(),
+                links: Vec::new(),
+            });
+            let pages: Vec<Arc<_>> = std::iter::repeat_with(|| Arc::clone(&stub))
+                .take(page_count as usize)
+                .collect();
+            return Ok(Self {
+                pages,
+                path: std::path::PathBuf::from(path),
+                metadata: flashpdf_core::DocumentMetadata::default(),
+                pdf_version: None,
+                is_encrypted: false,
+                is_linearized: false,
+                toc: Vec::new(),
+            });
+        }
+
         let opts = flashpdf_core::ExtractOptions {
             page_parallel: true,
             file_parallel: false,

@@ -465,6 +465,13 @@ impl Document {
     }
 
     /// Get the page count from the page tree.
+    ///
+    /// Three-tier resolution mirroring `extract_doc`:
+    /// 1. Top-level `/Count` field (cheapest — one object lookup)
+    /// 2. Walk `/Kids` recursively via `page_refs().len()` (correct for
+    ///    nested page trees where `/Count` lives on inner nodes)
+    /// 3. xref scan for `/Type /Page` via `recover_page_refs().len()`
+    ///    (last resort for malformed PDFs without a working `/Pages` chain)
     pub fn page_count(&self) -> ParseResult<u32> {
         let root = self.root()?;
         let pages_ref = root
@@ -476,11 +483,19 @@ impl Document {
             ))?;
 
         let pages = self.get_object(pages_ref.num)?;
-        pages
-            .get(b"Count")
-            .and_then(|c| c.as_i64())
-            .map(|n| n as u32)
-            .ok_or(ParseError::Message("missing /Count in Pages".to_string()))
+        if let Some(n) = pages.get(b"Count").and_then(|c| c.as_i64()) {
+            return Ok(n as u32);
+        }
+
+        // Fallback 1: walk Kids recursively.
+        if let Ok(refs) = self.page_refs() {
+            if !refs.is_empty() {
+                return Ok(refs.len() as u32);
+            }
+        }
+
+        // Fallback 2: xref scan for /Type /Page.
+        Ok(self.recover_page_refs().len() as u32)
     }
 
     /// Iterate over page object references.
