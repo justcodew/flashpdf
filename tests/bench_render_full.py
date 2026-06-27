@@ -69,11 +69,26 @@ def render_pdftext(p, dpi):
     _ = bitmap.to_pil()
     pdf.close()
 
+def render_liteparse(p, dpi):
+    # liteparse.screenshot returns PNG bytes; DPI is fixed by the lib
+    # (~150 DPI for A4). We can't change it; just call with page 1 (1-indexed).
+    # For benchmark comparability we accept the lib's native DPI.
+    from liteparse import LiteParse
+    lp = LiteParse()
+    rs = lp.screenshot(p, page_numbers=[1])
+    _ = rs[0].image_bytes  # forces full PNG encoding
+
+def render_pdf_oxide(p, dpi):
+    from pdf_oxide import PdfDocument
+    d = PdfDocument(p)
+    _ = d.render_page(0, dpi=dpi)  # returns PNG bytes
+
 runners = {
     "flashpdf": render_flashpdf,
     "pypdfium2": render_pypdfium2,
     "PyMuPDF": render_pymupdf,
-    # pdftext uses pypdfium2 internally; skip separate row to avoid double-counting
+    "liteparse": render_liteparse,
+    "pdf_oxide": render_pdf_oxide,
 }
 
 try:
@@ -87,7 +102,7 @@ except Exception as e:
     print(json.dumps({"ok": False, "err": f"{type(e).__name__}: {e}", "tb": tb}))
 '''
 
-LIBS = ["flashpdf", "pypdfium2", "PyMuPDF"]
+LIBS = ["flashpdf", "pypdfium2", "PyMuPDF", "liteparse", "pdf_oxide"]
 
 
 def bench_one(lib: str, path: str) -> dict:
