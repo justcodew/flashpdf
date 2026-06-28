@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1] - 2026-06-28
+
+修复 v0.8.0 的 sdist 上传失败：maturin 不自动把 `LICENSE` 放进 sdist
+tarball，但 PEP 639 metadata 声明了它，导致 PyPI 拒绝 sdist。0.8.0 的
+wheel 已成功上传，但 sdist upload 失败造成 release 不完整。0.8.1 在
+`pyproject.toml [tool.maturin] include` 显式加上 `{ path = "LICENSE",
+format = "sdist" }`。
+
 ## [0.8.0] - 2026-06-28
 
 **首次在 PyPI 发布自带 PDFium 渲染的 wheel。** `pip install flashpdf`

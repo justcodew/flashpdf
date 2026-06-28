@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "flashpdf"
-version = "0.8.0"
+version = "0.8.1"
 description = "The fastest PDF text and image extraction engine. Rust core + Python bindings."
 readme = "README.md"
 license = {text = "MIT"}
@@ -57,6 +57,10 @@ python-source = "python"
 # Missing dir (text-only build) is fine — glob matches nothing.
 include = [
     { path = "python/flashpdf/_pdfium/**/*", format = "wheel" },
+    # maturin auto-includes LICENSE in wheels but NOT in sdist; PyPI rejects
+    # the sdist with "License-File LICENSE does not exist" because PEP 639
+    # metadata declares it. Explicit sdist inclusion fixes the upload.
+    { path = "LICENSE", format = "sdist" },
 ]
 
 [tool.maturin.target.'cfg(target_os = "linux")']
