@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.8.0] - 2026-06-28
+
+**首次在 PyPI 发布自带 PDFium 渲染的 wheel。** `pip install flashpdf`
+即自带 PDFium binary（~7MB），渲染开箱即用，无需任何环境配置。
+
+### Added
+
+- **`render` Cargo feature**（基于 `pdfium-render` crate）：通过 PDFium
+  FFI 渲染页面为 PNG。
+- **`page.get_pixmap(dpi=150, output=None)`**：返回 PNG bytes，可选写入文件。
+- **`flashpdf.open(path, render_only=True)`**：跳过文本/图像提取的快速路径，
+  专为纯渲染场景。
+- **Wheel 自带 PDFium binary**：策略 (a) —— `pip install` 即得渲染能力，
+  无需 `PDFIUM_PATH` / 系统库 / 手动下载。Binary 通过 `flashpdf._pdfium_`
+  目录随包发布，runtime 通过 `flashpdf.__file__` sibling 自动发现。
+- **Inline image 解析**（BI/ID/EI 操作符）：v0.7.2 加入，扫描页 / 票据 /
+  Office 导出常见。
+- **LICENSES/**：PDFium (BSD-3-Clause) + pdfium-render (MIT) 的协议副本，
+  满足 bundle 合规要求。
+
+### Fixed（incorporates v0.7.1–v0.7.3 内部里程碑）
+
+- 11 个 page-tree 解析 bug（v0.7.3）：`/Prev` 链、xref stream PNG predictor、
+  Compressed page refs —— PyMuPDF 165-PDF 语料从 154/165 提升到 165/165。
+
+### Distribution
+
+- 4 平台 render wheel：linux x86_64、windows x64、macos arm64、macos x86_64
+  （交叉编译）。每平台都验证 PDFium binary 在 wheel 内；native 平台跑
+  smoke test。
+- Linux aarch64 暂缺：`pdfium-render` 0.9.2 在该 target 有上游 compile bug
+  （`char` signedness）。等 crate 修复后重新加入。
+
+---
+
 ## [0.7.3] - 2026-06-28
 
 11 个 page-tree bug 修复 —— 165/165 渲染零失败。
