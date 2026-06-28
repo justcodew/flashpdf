@@ -310,7 +310,8 @@ pypdf 在加密 + 损坏 xref 上比 Rust/C 实现的库脆弱。
 | **仅渲染（每文件第 0 页缩略图）** | ✅ flashpdf | liteparse（同样 PDFium-based，0 失败）或 pypdfium2（更稳，0 失败）|
 | **需要编辑 PDF（合并/拆分/签名/水印）** | pdf_oxide | PyMuPDF / pypdf |
 | **需要 AES-256 / 加密码 PDF** | PyMuPDF | pypdfium2 |
-| **表格提取（精确 cell 坐标）** | pdfplumber | pdftext |
+| **简单有线框表格（规则派够用）** | pdfplumber | pdftext |
+| **复杂 / 无边框 / 合并单元格（模型派）** | Surya | PaddleOCR PP-Structure / Table Transformer |
 | **LLM 友好的 markdown 输出** | markitdown | pdftext |
 | **极简零依赖部署（仅 Python）** | pypdf | pdfminer |
 | **字符级坐标精度 + 自带解析器** | pdfminer | pdfplumber |
