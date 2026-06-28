@@ -69,6 +69,141 @@ for path, blocks, images in flashpdf.extract_many(paths, include_images=False):
 
 ---
 
+### `flashpdf.open(path, *, include_images=True, include_rotated=False, page_parallel=True, render_only=False) -> Document`
+
+fitz 风格入口。`open()` 时一次性并行提取所有页（除非 `render_only=True`），
+后续 `doc[i]` / `page.get_text()` 纯内存查询。
+
+**参数：**
+
+- `path` (str): PDF 文件路径
+- `include_images` (bool): 是否提取图像字节。纯文本场景设 `False` 省解码时间。默认 `True`
+- `include_rotated` (bool): 是否提取 90°/270° 旋转字符（arXiv 侧栏水印、图表纵轴标签）。默认 `False`
+- `page_parallel` (bool): 页级并行（rayon）。单文件多页 2-4× 加速。默认 `True`
+- `render_only` (bool): **v0.7.1 新增**，专为纯渲染场景跳过 eager 文本/图像提取。
+  开启时 `get_text()` / `get_images()` 返回空，`page.rect` / `is_scanned` 为 stub，
+  但 `len(doc)` / `doc[i]` / `get_pixmap()` 正常。默认 `False`
+
+**返回：** `Document` 上下文管理器（支持 `with` 语句）
+
+**示例：**
+
+```python
+import flashpdf
+
+# fitz 风格：open + per-page 查询
+with flashpdf.open("paper.pdf") as doc:
+    print(len(doc))                  # 页数
+    page = doc[0]                    # 首页（支持 doc[-1] 负索引）
+    d  = page.get_text("dict")       # 结构化 dict
+    t  = page.get_text("text")       # 纯文本
+    bs = page.get_text("blocks")     # fitz "blocks" 元组列表
+    imgs = page.get_images()         # 该页嵌入图像
+    print(page.is_scanned, page.rect, page.number)
+
+# 仅渲染场景：跳过文本提取，省时间
+with flashpdf.open("paper.pdf", render_only=True) as doc:
+    png = doc[0].get_pixmap(dpi=150)
+```
+
+**何时用哪个 API：**
+
+| 场景 | 推荐 |
+|---|---|
+| 交互式 / 逐页随机访问 | `open()` |
+| 批量向量化（千份 PDF）| `extract_many(file_parallel=True)` |
+| 一次性单文件 | `extract()` |
+| 纯渲染缩略图 | `open(render_only=True)` + `get_pixmap()` |
+
+---
+
+### `Document`
+
+`open()` 返回的对象，支持 `len()` / 索引 / 迭代 / 上下文管理。
+
+| API | 说明 |
+|---|---|
+| `len(doc)` | 页数 |
+| `doc[i]` / `doc[-1]` | 取页（支持负索引），返回 `Page` |
+| `for page in doc` | 迭代所有页 |
+| `doc.metadata` | 元数据 dict（`title` / `author` / `subject` / `creator` / `producer` / `creationDate` / `modDate` 等）|
+| `doc.get_toc()` | 目录（outline / TOC），返回 `[(level, title, page, kind, ...), ...]` |
+| `with doc: ...` | 上下文管理（资源清理）|
+
+---
+
+### `Page`
+
+通过 `doc[i]` 取得。`open()` 时已提取完成，所有方法/属性纯内存查询。
+
+| API | 说明 |
+|---|---|
+| `page.get_text(mode)` | `"dict"`（默认）/`"text"`/`"blocks"`，与 fitz 对齐 |
+| `page.get_images()` | 该页所有嵌入图像列表（Do 引用 + BI/ID/EI inline）|
+| `page.get_links()` | 该页超链接列表（v0.4.0+）|
+| `page.get_pixmap(dpi=150, output=None)` | **v0.7.1 新增**，渲染为 PNG bytes。需 `render` feature + PDFium binary。`output` 给定时同时写文件。不带 feature 时抛 `NotImplementedError` |
+| `page.is_scanned: bool` | 扫描页启发式（v0.1.4）|
+| `page.rect: [x0, y0, x1, y1]` | MediaBox |
+| `page.number: int` | 0-based 页码 |
+| `page.diagnostics: dict` | 见下表 |
+
+**`page.diagnostics` 字段：**
+
+| 字段 | 含义 | 触发后的处理建议 |
+|---|---|---|
+| `rotated_char_count` | 非轴对齐文本矩阵下的字符 | 用 `include_rotated=True` 重提取 |
+| `type3_char_count` | Type3 字体下的字符 | 检查是否需要专门的 Type 3 处理器或 OCR |
+| `undecoded_byte_count` | 解码失败回退为 U+FFFD 的字节数 | 多为字体子集化遗留，OCR 能补回 |
+| `out_of_page_block_count` | reading-order 边距过滤器丢弃的块 | 多为矢量图误聚或旋转文本越界 |
+| `inline_image_count` | BI/ID/EI 操作符嵌入的内联图像数 | 老扫描 PDF / 票据 / Office 导出常见 |
+
+---
+
+### `page.get_pixmap(dpi=150, output=None) -> bytes`
+
+**v0.7.1 新增**。调用 PDFium 把当前页渲染为 PNG。
+
+**前置条件：**
+
+1. flashpdf 用 `--features render` 编译（默认 PyPI wheel 不带，需源码构建；
+   详见 [RENDERING.md](RENDERING.md)）
+2. 系统 path 上有 PDFium binary（`PDFIUM_PATH` env / `./pdfium-bin/` / system library）
+
+**参数：**
+
+- `dpi` (int): 输出分辨率。72 DPI = PDF 原始尺寸，150 DPI = 屏幕预览，300 DPI = 打印。默认 `150`
+- `output` (str | None): 如果给定时，PNG 同时写入该路径
+
+**返回：** PNG 字节（`bytes`）
+
+**不实现（vs fitz）：**
+
+- ❌ `clip` / `matrix` / `colorspace` / `alpha` 参数
+- ❌ PIL / numpy 互操作（用户自己 `PIL.Image.open(io.BytesIO(png))`）
+- ❌ raw RGBA 输出（恒为 RGBA + 白底 PNG）
+- ❌ 多种输出格式（仅 PNG）
+
+**示例：**
+
+```python
+import flashpdf
+
+# 直接获取 PNG bytes
+with flashpdf.open("paper.pdf", render_only=True) as doc:
+    png = doc[0].get_pixmap(dpi=150)
+    with open("page0.png", "wb") as f:
+        f.write(png)
+
+# 直接写文件
+with flashpdf.open("paper.pdf", render_only=True) as doc:
+    doc[0].get_pixmap(dpi=72, output="thumb.png")
+```
+
+详细渲染基准、限制、本地开发流程见 [RENDERING.md](RENDERING.md) 和
+[BENCHMARK_RENDER.md](BENCHMARK_RENDER.md)。
+
+---
+
 ## 输出格式
 
 ### Block (文本块)

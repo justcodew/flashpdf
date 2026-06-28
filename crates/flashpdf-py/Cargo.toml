@@ -12,3 +12,9 @@ flashpdf-core = { path = "../flashpdf-core" }
 pyo3 = { version = "0.24", features = ["extension-module", "abi3", "abi3-py39"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "smallvec"] }
+
+[features]
+default = []
+# Enables `page.get_pixmap()`. Forwards to flashpdf-core's `render` feature
+# (which pulls in pdfium-render). Requires a PDFium dynamic library at runtime.
+render = ["flashpdf-core/render"]

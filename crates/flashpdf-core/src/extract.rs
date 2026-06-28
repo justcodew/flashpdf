@@ -89,6 +89,12 @@ pub struct PageDiagnostics {
     /// mis-clustered vector graphics or rotated text whose AABB pokes
     /// outside the page.
     pub out_of_page_block_count: usize,
+    /// Inline images encountered (BI/ID/EI operators, PDF spec §8.9.7).
+    /// Inline images are pixel data embedded directly in the content stream
+    /// rather than referenced via /XObject. They're now included in
+    /// `page.get_images()` with `name="inline"`, and counted separately here
+    /// so callers can detect "all images are inline" (common for old scans).
+    pub inline_image_count: usize,
 }
 
 /// Thresholds for the scan-detection heuristic.
@@ -439,6 +445,7 @@ fn extract_single_page(
         type3_char_count: scan_result.type3_char_count,
         undecoded_byte_count: scan_result.undecoded_byte_count,
         out_of_page_block_count: out_of_page_dropped,
+        inline_image_count: scan_result.inline_image_count,
     };
 
     // Detect scanned page (heuristic: little text + large image covering the page)

@@ -55,9 +55,14 @@ fn set_log_level(level: &str) -> PyResult<()> {
 /// text). Pages are shared with `Arc` internally, so `doc[i]` is O(1) —
 /// no per-access clone of the page's blocks/images.
 #[pyfunction]
-#[pyo3(signature = (path, include_images=true, include_rotated=false))]
-fn open(path: &str, include_images: bool, include_rotated: bool) -> PyResult<PyDocument> {
-    PyDocument::open(path, include_images, include_rotated)
+#[pyo3(signature = (path, include_images=true, include_rotated=false, render_only=false))]
+fn open(
+    path: &str,
+    include_images: bool,
+    include_rotated: bool,
+    render_only: bool,
+) -> PyResult<PyDocument> {
+    PyDocument::open(path, include_images, include_rotated, render_only)
 }
 
 /// Extract text blocks and images from a single PDF file.
@@ -355,6 +360,7 @@ fn render_extract_result<'py>(
             diag_dict.set_item("type3_char_count", diag.type3_char_count)?;
             diag_dict.set_item("undecoded_byte_count", diag.undecoded_byte_count)?;
             diag_dict.set_item("out_of_page_block_count", diag.out_of_page_block_count)?;
+            diag_dict.set_item("inline_image_count", diag.inline_image_count)?;
             page_dict.set_item("diagnostics", diag_dict)?;
             pages_list.append(page_dict)?;
         }
@@ -381,6 +387,11 @@ fn render_extract_result<'py>(
 #[pyclass(name = "Document")]
 pub struct PyDocument {
     pages: Vec<Arc<flashpdf_core::PageResult>>,
+    /// Source file path. Threaded through to `PyPage` so that
+    /// `page.get_pixmap()` (render feature) can re-open the file with PDFium.
+    /// PDFium is an independent PDF interpreter and does not share flashpdf's
+    /// internal parser state.
+    path: std::path::PathBuf,
     metadata: flashpdf_core::DocumentMetadata,
     /// PDF version string from `%PDF-X.Y` header (e.g. `"1.7"`), or `None`
     /// when the header is missing/malformed. Surfaced as part of
@@ -399,9 +410,14 @@ pub struct PyDocument {
 #[pymethods]
 impl PyDocument {
     #[new]
-    #[pyo3(signature = (path, include_images=true, include_rotated=false))]
-    fn new(path: &str, include_images: bool, include_rotated: bool) -> PyResult<Self> {
-        Self::open(path, include_images, include_rotated)
+    #[pyo3(signature = (path, include_images=true, include_rotated=false, render_only=false))]
+    fn new(
+        path: &str,
+        include_images: bool,
+        include_rotated: bool,
+        render_only: bool,
+    ) -> PyResult<Self> {
+        Self::open(path, include_images, include_rotated, render_only)
     }
 
     /// Number of pages. `len(doc)`.
@@ -429,6 +445,7 @@ impl PyDocument {
         let page = PyPage {
             page_idx: i as usize,
             page: Arc::clone(&self.pages[i as usize]),
+            path: self.path.clone(),
         };
         Py::new(py, page)
     }
@@ -534,7 +551,49 @@ impl PyDocument {
 }
 
 impl PyDocument {
-    fn open(path: &str, include_images: bool, include_rotated: bool) -> PyResult<Self> {
+    fn open(
+        path: &str,
+        include_images: bool,
+        include_rotated: bool,
+        render_only: bool,
+    ) -> PyResult<Self> {
+        // Render-only fast path: skip text/image extraction entirely.
+        // We still need page count so `doc[i]` works, but PageResults are
+        // empty stubs — text-extraction methods will return empty results,
+        // which is the documented contract for render_only=True.
+        //
+        // Use case: rendering-heavy pipelines (thumbnails, OCR feedstock,
+        // batch rasterization) where paying ~ms/PDF for text extraction
+        // the user never reads is wasted work. Benchmark-fairness win:
+        // matches fitz.open() / pdfium.PdfDocument() lazy semantics.
+        if render_only {
+            let doc = flashpdf_core::Document::open(path)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            let page_count = doc
+                .page_count()
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            let stub = Arc::new(flashpdf_core::PageResult {
+                blocks: Vec::new(),
+                images: Vec::new(),
+                is_scanned: false,
+                rect: [0.0, 0.0, 0.0, 0.0],
+                diagnostics: Default::default(),
+                links: Vec::new(),
+            });
+            let pages: Vec<Arc<_>> = std::iter::repeat_with(|| Arc::clone(&stub))
+                .take(page_count as usize)
+                .collect();
+            return Ok(Self {
+                pages,
+                path: std::path::PathBuf::from(path),
+                metadata: flashpdf_core::DocumentMetadata::default(),
+                pdf_version: None,
+                is_encrypted: false,
+                is_linearized: false,
+                toc: Vec::new(),
+            });
+        }
+
         let opts = flashpdf_core::ExtractOptions {
             page_parallel: true,
             file_parallel: false,
@@ -558,6 +617,7 @@ impl PyDocument {
 
         Ok(Self {
             pages,
+            path: std::path::PathBuf::from(path),
             metadata: result.metadata,
             pdf_version: result.pdf_version,
             is_encrypted: result.is_encrypted,
@@ -576,6 +636,49 @@ fn opt_to_py<'py>(py: Python<'py>, s: &Option<String>) -> Bound<'py, PyAny> {
     }
 }
 
+/// Tell `flashpdf-core::render` where to find the wheel-bundled PDFium
+/// binary (under `<flashpdf install dir>/_pdfium/`). Idempotent — the core
+/// side uses a `OnceLock`, so calling this on every `get_pixmap()` is cheap.
+///
+/// Skipped silently when the dir doesn't exist (text-only wheel, source dev
+/// build without local PDFium). In that case the core falls through to
+/// `PDFIUM_PATH` / `./pdfium-bin/` / system library.
+#[cfg(feature = "render")]
+fn register_bundled_pdfium(py: Python<'_>) {
+    use std::path::PathBuf;
+
+    // Resolve `flashpdf.__file__` (regular package) or first entry of
+    // `flashpdf.__path__` (namespace package), then point at the sibling
+    // `_pdfium/` directory. Falls through silently on any error.
+    //
+    // PyO3's `import_bound` is cleaner than eval() here because eval() in
+    // Python only accepts expressions, not statements like `import`.
+    let location: Option<String> = (|| {
+        let pkg = py.import("flashpdf").ok()?;
+        // Try `__file__` first (regular package).
+        if let Ok(file_obj) = pkg.getattr("__file__") {
+            if let Ok(s) = file_obj.extract::<String>() {
+                return Some(s);
+            }
+        }
+        // Fall back to first `__path__` entry (namespace package).
+        let path_obj = pkg.getattr("__path__").ok()?;
+        let path_seq = path_obj.downcast_into::<pyo3::types::PySequence>().ok()?;
+        let first = path_seq.get_item(0).ok()?;
+        first.extract::<String>().ok()
+    })();
+
+    let Some(file_path) = location else { return };
+    let path_buf = PathBuf::from(file_path);
+    let Some(parent) = path_buf.parent() else {
+        return;
+    };
+    let pdfium_dir = parent.join("_pdfium");
+    if pdfium_dir.is_dir() {
+        flashpdf_core::render::set_bundled_pdfium_dir(pdfium_dir);
+    }
+}
+
 /// A single PDF page view. Returned by `doc[i]`.
 ///
 /// `get_text("dict")` returns a fitz-compatible dict with text blocks
@@ -588,6 +691,10 @@ pub struct PyPage {
     /// Arc-shared with the parent Document. Cloning a Page (via `doc[i]`)
     /// is a single atomic refcount bump — no deep copy of blocks/images.
     page: Arc<flashpdf_core::PageResult>,
+    /// Source file path (cloned from PyDocument). Used by `get_pixmap()`
+    /// under the `render` feature to re-open the file with PDFium.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
+    path: std::path::PathBuf,
 }
 
 #[pymethods]
@@ -625,6 +732,57 @@ impl PyPage {
             list.append(link_to_dict(py, link)?)?;
         }
         Ok(list)
+    }
+
+    /// Render this page to PNG bytes via PDFium. Requires both:
+    ///   1. The `render` Cargo feature was enabled when the wheel was built.
+    ///   2. A PDFium dynamic library is reachable at runtime
+    ///      (`PDFIUM_PATH` env or `./pdfium-bin/`). See `docs/RENDERING.md`.
+    ///
+    /// - `dpi` (default 150): output resolution. 72 DPI = PDF native size.
+    ///   Higher = sharper but larger PNGs.
+    /// - `output` (optional): if given, also write the PNG to this file path.
+    ///
+    /// Returns: PNG file bytes.
+    ///
+    /// Note: PDFium is an independent PDF interpreter — it does not share
+    /// flashpdf's parsed state, so each call re-opens and re-parses the file.
+    /// For bulk rendering, prefer calling once per page rather than once per
+    /// pixel-level tweak.
+    #[pyo3(signature = (dpi=150, output=None))]
+    fn get_pixmap<'py>(
+        &self,
+        py: Python<'py>,
+        dpi: u32,
+        output: Option<&str>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        #[cfg(not(feature = "render"))]
+        {
+            let _ = (py, dpi, output);
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "page.get_pixmap() requires the 'render' Cargo feature. \
+                 Reinstall the wheel with the render build: \
+                 maturin develop --release --features render",
+            ));
+        }
+        #[cfg(feature = "render")]
+        {
+            // Register the wheel-bundled PDFium dir on first render. No-op
+            // if PDFIUM_PATH is set or the dir doesn't exist (e.g. text-only
+            // wheel, source dev build without local PDFium).
+            register_bundled_pdfium(py);
+
+            let png = flashpdf_core::render::render_page_to_png(
+                &self.path.to_string_lossy(),
+                self.page_idx,
+                dpi,
+            )
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+            if let Some(p) = output {
+                std::fs::write(p, &png).map_err(pyo3::exceptions::PyIOError::new_err)?;
+            }
+            Ok(pyo3::types::PyBytes::new(py, &png))
+        }
     }
 
     #[getter]
@@ -665,6 +823,10 @@ impl PyPage {
     ///     /ToUnicode or /Encoding).
     ///   - `out_of_page_block_count`: blocks dropped by the reading-order
     ///     margin filter (bbox extends >10% outside the page rect).
+    ///   - `inline_image_count`: inline images (BI/ID/EI operators, PDF
+    ///     spec §8.9.7) embedded in the content stream. These are also
+    ///     included in `page.get_images()` with name="inline". A high count
+    ///     with low text suggests an old scanned PDF.
     #[getter]
     fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let d = PyDict::new(py);
@@ -673,6 +835,7 @@ impl PyPage {
         d.set_item("type3_char_count", diag.type3_char_count)?;
         d.set_item("undecoded_byte_count", diag.undecoded_byte_count)?;
         d.set_item("out_of_page_block_count", diag.out_of_page_block_count)?;
+        d.set_item("inline_image_count", diag.inline_image_count)?;
         Ok(d)
     }
 }

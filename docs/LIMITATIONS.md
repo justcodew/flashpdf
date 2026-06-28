@@ -1,0 +1,243 @@
+# flashpdf 短板清单
+
+flashpdf 在文本提取和页面渲染两个场景是最快的（见 [README 基准](../README.md#基准)
+和 [BENCHMARK_RENDER.md](BENCHMARK_RENDER.md)），但**不是所有 PDF 任务都最快，
+也不是所有 PDF 任务都做**。本文系统化列出已知短板，避免用户误用。
+
+## TL;DR：选择 flashpdf 之前先确认这些
+
+| 你的需求 | flashpdf 行不行 |
+|---|---|
+| 文本提取（blocks/lines/spans + bbox/字体/字号/颜色）| ✅ 最快 |
+| 页面渲染 + PNG 编码 | ✅ 最快（需 `render` feature + PDFium binary）|
+| 嵌入图像提取（JPEG/PNG/JPX）| ✅ 快，但**没对比 benchmark** |
+| 加密 PDF（AES-256 / 需要密码）| ❌ 只支持 RC4 / AES-128 空密码 |
+| PDF 编辑（合并/拆分/加页/删页/表单填写/签名）| ❌ 完全不做 |
+| OCR | ❌ 不做（只识别扫描页，不解码文字）|
+| 注释、表单字段、富媒体 | ❌ 不做 |
+| 字体度量精度（ascender/descender/origin、sub/superscript）| ❌ 不输出 |
+| italic/bold 字体探测 | ⚠️ 部分支持（名字启发式，不读 /FontDescriptor /Flags）|
+| 矢量路径数据提取（path 坐标/曲线参数）| ❌ 不做（PDFium 渲染时会把矢量图完整光栅化进 PNG，但不暴露 path 数据）|
+| 页面布局重排（reflow / reflowable 输出）| ❌ 不做 |
+| < 1KB 极小文件批量 | ⚠️ 优势消失（启动开销主导，与 pdf_oxide 持平）|
+
+## 1. 加密 PDF 限制（重要）
+
+flashpdf 只支持 **RC4（V1/V2, R=2/3）** 和 **AES-128（V4, R=4）**，**且只接受空用户密码**。
+
+具体限制：
+
+- ❌ **AES-256（V5/R6, PDF 2.0）不支持**——直接抛 `ValueError`
+- ❌ **非空密码不支持**——没有 `password=` 参数，加密码的 PDF 全部读不了
+- ❌ **所有权密码（owner password）不支持**
+- ❌ **加密元数据流 (`/EncryptMetadata`) 不单独处理**
+
+代码位置：`crates/flashpdf-core/src/crypto.rs:3-7`
+
+```rust
+// AES-256 (V5/R6) is detected but reported as unsupported.
+```
+
+**对比**：PyMuPDF / pypdfium2 / pypdf 全套支持，包括 AES-256 和任意密码。
+
+**影响范围**：现代 Word/Office 导出的加密 PDF、企业级文档管理系统产物、
+部分政府/法律 PDF 用 AES-256——这些 flashpdf 都打不开。
+
+## 2. `span.flags` 部分支持（精度短板）
+
+README 里写"flags 暂为 stub"**已过时**——v0.7 实际有部分支持，但精度不如 fitz。
+
+实际行为（`crates/flashpdf-core/src/font.rs:556` `compute_font_flags`）：
+
+| 字段 | 检测方式 | 准确度 |
+|---|---|---|
+| italic (bit 2) | 字体名匹配 `*Italic*` / `*Oblique*`；**不读 /FontDescriptor /Flags**（call site 传 None） | ⚠️ 漏判标 Italic 位但名字不带 Italic 的字体 |
+| serif (bit 4) | 字体名匹配 `*Times*` / `*Serif*` / `*Garamond*` / `*Palatino*` | ⚠️ 同上 |
+| monospaced (bit 8) | 字体名匹配 `*Courier*` / `*Mono*` / `*Consolas*` / `*Menlo*` | ⚠️ 同上 |
+| bold (bit 16) | 字体名匹配 `*Bold*` / `*Black*` / `*Heavy*` / `*Demi*` / `*Semibold*`（PDF /Flags 无 bold 位） | ⚠️ 名字不带 Bold 但实际粗体的字体漏判 |
+
+**对比**：fitz 直接读 `/FontDescriptor /Flags` 位字段，更准。
+
+**修复路径**：call site 应该传 `/FontDescriptor /Flags` 给 `compute_font_flags`，
+但当前架构里 `extract_doc` 没把 /Flags 透传到字体映射。这是已知 enhancement，
+不在 v0.7 路线图里。
+
+## 3. fitz 扩展字段不输出
+
+`span` 字段对齐 fitz **常用子集**，但不输出 fitz 的扩展字段：
+
+| fitz 有 | flashpdf | 影响 |
+|---|---|---|
+| `bbox` / `text` / `font` / `size` / `color` / `flags` | ✅ 都有 | — |
+| `ascender` / `descender` | ❌ 不输出 | 字体度量级排版分析做不了 |
+| `origin` (字符起始点) | ❌ 不输出 | 字符级位置追踪做不了 |
+| `block_no` / `line_no` / `span_no`（部分 mode）| ❌ 不输出 | 需要用户自己 enumerate |
+
+如果你需要这些字段，用 fitz 而不是 flashpdf。
+
+## 4. 完全不做的功能（设计目标）
+
+flashpdf 是**纯只读数据提取库**——下列功能**永远不会做**：
+
+### 编辑类
+- ❌ 合并/拆分 PDF
+- ❌ 添加、删除、重排页面
+- ❌ 表单字段填写（AcroForm / XFA）
+- ❌ PDF 数字签名
+- ❌ 添加/编辑注释（高亮、便签、链接）
+- ❌ 加密/解密 PDF（flashpdf 解密只用于内部读取，不写回）
+- ❌ 元数据写入
+
+### 渲染扩展
+- ✅ **矢量图光栅化**：PDFium 完整渲染页面里的所有矢量内容（路径、曲线、
+  填充、表格线、图表轮廓、注释、表单字段）进 PNG。`get_pixmap()` 输出
+  包含全部矢量图形——和 PyMuPDF / pypdfium2 等价
+- ❌ **矢量路径数据提取**：text-extraction 核心不解析 path 算子。要 vector
+  path 坐标/曲线参数（如 CAD 图纸的几何数据），用 PyMuPDF 的 `page.get_drawings()`
+- ❌ OCR（识别扫描页文字）
+- ❌ 多种输出格式（JPEG / WebP / TIFF）—— `get_pixmap` 只返回 PNG
+
+### 文档级
+- ❌ 增量更新解析（/Prev xref chain 不完全跟随）
+- ❌ 嵌入式文件流（/EmbeddedFile）提取
+- ❌ 可访问性标记树（/StructTree）解析
+
+## 5. 图像提取的局限
+
+flashpdf 的图像提取**只针对嵌入位图**——`Do` 引用的 Image XObject。
+
+✅ 支持：
+- JPEG（DCTDecode）
+- PNG（FlateDecode with PNG predictor）
+- JPX（JPXDecode / JPEG2000）
+- 原始字节直出（不解码、不重新压缩）
+
+❌ 不支持：
+- 矢量路径数据（path 算子、曲线、填充）—— 不算"图像"；要几何数据用 PyMuPDF `page.get_drawings()`，要看矢量图视觉效果用 `page.get_pixmap()`（PDFium 完整光栅化）
+- 页面截图（"渲染这页为图片"用 `get_pixmap`，不是 `get_images`）
+- CCITT Fax 编码（CCFDecode）—— 老式扫描 PDF 可能有
+- JBIG2 / RunLength 编码 —— 罕见但合法
+- 嵌入式 ICC 配置文件提取 —— 颜色管理交给调用方
+- /SMask 软掩膜分离 —— 直接内联到主图像，不单独提取
+
+✅ **支持内联图像**（v0.7.2 新增）：`BI/ID/EI` 操作符（PDF spec §8.9.7）
+现在被解析，inline 图像进入 `page.get_images()`（`name="inline"`），
+`page.diagnostics.inline_image_count` 暴露计数。`is_scanned` 启发式也
+纳入 inline 图像，避免扫描页误判。
+
+**未对比 benchmark**：vs PyMuPDF / pdfimages / pypdf 的图像提取速度**没测过**。
+理论上跟随文本提取的速度（同一遍解析），但**没数据支撑"图像提取也最快"**。
+
+## 6. 渲染功能的局限
+
+`get_pixmap()` 是 PDFium 的薄封装，因此继承了 PDFium 的特性集 + 我们封装的限制：
+
+### API 层
+- ❌ **不返回 raw 像素**（只返回 PNG bytes）。要拿 RGBA 原始字节做后续处理
+  的场景（OpenCV、numpy），需要先 decode PNG——不如 fitz `pix.samples` 直接
+- ❌ 无 `clip` / `matrix` / `colorspace` / `alpha` 参数
+- ❌ 无 PIL / numpy 互操作（用户自己 `PIL.Image.open(io.BytesIO(png))`）
+- ❌ 输出恒为 RGBA + 白底（不保留透明度）
+
+### 部署层
+- ✅ **PDFium binary 打包进 wheel**（v0.7.x 之后）：`pip install flashpdf`
+  装的 wheel 自带 PDFium binary 在 `flashpdf/_pdfium/` 下，开箱即用，与
+  fitz / pypdfium2 部署体验持平
+- ⚠️ **wheel 体积**：~10MB（PDFium binary 占 7MB）。vs 纯文本 wheel ~3MB。
+  匹配 pypdfium2 的分发模型
+- ⚠️ **平台覆盖**：当前 CI 矩阵覆盖 linux x86_64/aarch64、macos x86_64/aarch64、
+  win x64。其他平台（linux armv7、windows arm64、BSD 等）需源码构建
+- ⚠️ **自定义 PDFium 版本**：用户无法选择 PDFium 版本——wheel 绑定一个
+  固定版本。要换版本，用 `PDFIUM_PATH` env 覆盖（指向自定义 binary）
+
+### 性能层
+- ⚠️ **极端吞吐场景未测**：每秒 1000+ 页缩略图这类场景，pypdfium2 的
+  C 直调可能比 flashpdf 的 Rust → FFI → Rust 多一层更快。没数据
+- ⚠️ **只测第 0 页**：渲染 benchmark 只渲染每文件第 0 页，长文档渲染
+  所有页的吞吐量没测过
+
+## 7. 极小文件场景优势消失
+
+README 基准里 tiny 桶（< 10KB）数据：
+
+| 库 | tiny p50 ms |
+|---|---:|
+| flashpdf | **0.092** |
+| pdf_oxide | 0.093 |
+
+**几乎持平**——不是显著领先。原因是极小文件场景**启动开销主导**（Python 解释器、
+库 import、PDF header 解析），真正的提取逻辑占比很小。
+
+`< 1KB` 的文件（纯邮件附件、极简表单）三家可能都是 0.05ms 量级，差距不显著。
+这种场景选 flashpdf 没意义，选 pdf_oxide / fitz 都一样。
+
+## 8. 字体子集化的精度问题
+
+PDF 字体子集化（`ABCDEF+TimesNewRoman`）的常见问题：
+
+- ✅ /ToUnicode CMap 解码（Unicode 反向映射）—— 支持
+- ✅ /Encoding + Differences —— 支持
+- ✅ Adobe Glyph List（AGL）—— 支持
+- ⚠️ **无 /ToUnicode 的子集字体** —— 字节级解码可能丢字符（变 U+FFFD）。
+  `page.diagnostics.undecoded_byte_count` 计数暴露这类情况
+- ⚠️ **CID 字体宽度估算**：缺失 CID width 时退化为 default width，
+  可能导致 bbox 不准
+- ❌ **Type 3 字体定位不准**：Type 3 字形由绘制操作定义（不是轮廓），
+  flashpdf 用 /Widths 解码但**字形几何可能错位**。
+
+## 9. 测试覆盖的盲区
+
+flashpdf 测试集中度高，但有些场景**没自动化测试覆盖**：
+
+- ❌ **AES-256 加密 PDF**：库代码有 detection（报 unsupported），但没 e2e 测试
+- ❌ **PDF 2.0 特性**（关联数组、Unicode 密码）：没测过
+- ❌ **超大 PDF**（> 100MB）：bench corpus 最大 8.3MB，更大文件行为未知
+- ❌ **多线程并发 `open()`**：rayon 内部并行测过，但用户级 threading 测试缺
+- ❌ **图像提取正确性**：benchmark 测了**速度**，没测**像素级正确性**
+  （解码出来的 JPEG 字节是否与 `pdfimages` 输出 bit-identical）
+
+## 10. 已知 bug / 待修
+
+- **`/Count` 在嵌套页树里不准**：v0.7.1 已修（三层 fallback），但极端边缘
+  case（/Pages /Kids 引用循环）会无限递归栈溢出
+- **xref 全表扫描恢复 O(N)**：10000+ 对象的 PDF 全表扫描可能 100ms+，
+  但仅在主路径失败时触发
+
+### v0.7.3 修复：11 个 page-tree bug（render_only 失败）
+
+v0.7.1 的渲染基准在 PyMuPDF 165-PDF 语料上有 11 个 PDF 渲染失败。
+根因是三个独立的 xref/page-tree 解析 bug：
+
+1. **`/Prev` 链不跟随**：incremental-update PDF（多次保存过的 PDF）
+   只有最新 xref 段被读，`/Prev` 指向的旧段被丢弃。修复：
+   `Document::parse_xref_at` 走 `/Prev` 链合并 entries（newest 胜出）。
+   影响：widgettest.pdf, test_3624.pdf, test_3848.pdf 等
+2. **xref stream 的 PNG predictor 不解码**：现代 PDF 的 xref stream
+   几乎全用 `/Predictor 12`（PNG Up）。原代码 Flate 解压后直接当 entry
+   字节解析，导致 type byte 错位 → 大部分 Compressed entries 指向不存在的
+   ObjStm → ObjStm 里的 page 对象全部丢失。修复：新增
+   `apply_png_predictor`，按 PNG 行格式（每行 1 字节 filter + Columns 数据）
+   反预测。**关键**：现实世界 PDF 即使 /Predictor 是 10-14 也用每行 filter
+   byte 的 PNG 格式（pdfium / PyMuPDF 行为一致）。
+   影响：test_2710.pdf, test_3058.pdf, test_4079.pdf, test_4755.pdf,
+   test_toc_count.pdf, v110-changes.pdf, test-3820.pdf, test_annot_file_info.pdf
+3. **`recover_page_refs` 跳过 Compressed entries**：上述 (2) 修好后，
+   page refs fallback 还需要扫 ObjStm 里的 page 对象。修复：扩展
+   `recover_page_refs` 同时处理 Uncompressed + Compressed entries，
+   按 (ObjStm byte offset, index within) 排序。
+
+修复后 165/165 全部渲染成功。带 7 个 PNG predictor 单元测试防回归。
+
+## 选型建议
+
+| 你的场景 | 推荐 |
+|---|---|
+| 纯文本提取，大批量（RAG / 全文索引）| ✅ flashpdf |
+| 同时要文本 + 渲染（混合工作流）| ✅ flashpdf |
+| 仅渲染缩略图 | ⚠️ flashpdf（领先）或 pypdfium2（部署更简单）|
+| 仅渲染 + 像素级后处理（OpenCV / OCR 输入）| ⚠️ fitz（pix.samples 直出）或 flashpdf + PNG decode |
+| 需要编辑 PDF | ❌ 用 PyMuPDF / pdf_oxide / pypdf |
+| 需要 AES-256 / 加密码 PDF | ❌ 用 PyMuPDF / pypdfium2 |
+| 极小文件批量（< 1KB）| 三家差不多，挑顺手 |
+| 字体度量级精度（italic/bold/ascender）| ❌ 用 PyMuPDF |
+| 学术级 Type 3 字形正确性 | ❌ 用 MuPDF / pdfium 直接（不是封装层）|

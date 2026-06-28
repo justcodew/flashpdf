@@ -83,6 +83,7 @@ pub fn recover_xref_by_scan(data: &[u8]) -> ParseResult<XrefTable> {
         encrypt_present: false,
         trailer_offset: None,
         id_first: None,
+        prev_offset: None,
     })
 }
 

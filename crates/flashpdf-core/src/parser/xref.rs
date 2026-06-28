@@ -77,6 +77,10 @@ pub struct XrefTable {
     /// standard encryption key derivation; empty when /ID is absent
     /// (which makes encrypted PDFs undecryptable).
     pub id_first: Option<Vec<u8>>,
+    /// Byte offset of the previous xref section (trailer `/Prev`),
+    /// present in incrementally-updated PDFs. `Document::parse_xref_at`
+    /// walks this chain to merge entries from older revisions.
+    pub prev_offset: Option<usize>,
 }
 
 impl XrefTable {
@@ -87,6 +91,99 @@ impl XrefTable {
 }
 
 // ─── Standard xref table parsing ───
+
+/// Apply a PNG predictor (PDF spec 7.4.4.4) to reverse the row-wise
+/// prediction step applied before Flate compression. Used by xref streams
+/// and some image filters. Predictor values:
+/// - 10: PNG None (no-op)
+/// - 11: PNG Sub (left byte)
+/// - 12: PNG Up (above byte) — most common for xref streams
+/// - 13: PNG Average
+/// - 14: PNG Paeth
+/// - 15: PNG Optimized — each row starts with a per-row filter-type byte
+///
+/// **Row layout**: Real-world PDF encoders (Acrobat, Word, Ghostscript)
+/// consistently emit per-row filter bytes for *any* predictor ≥ 10, even
+/// when /Predictor is 12 (which the spec implies should use a fixed Up
+/// filter with no per-row byte). PyMuPDF and pdfium both interpret the
+/// format this way. We do the same: for predictor ≥ 10, every row is
+/// `[filter_type_byte | columns bytes of (possibly) predicted data]`.
+///
+/// `columns` is the row width in bytes (PDF /Columns, default 1). The
+/// caller passes the *decompressed* (post-Flate) byte stream.
+pub fn apply_png_predictor(data: &[u8], columns: usize, predictor: u8) -> ParseResult<Vec<u8>> {
+    if predictor < 10 {
+        // No PNG predictor; data is already raw.
+        return Ok(data.to_vec());
+    }
+    if columns == 0 {
+        return Err(ParseError::Message(
+            "PNG predictor with /Columns 0".to_string(),
+        ));
+    }
+
+    // See note above: every row is `[filter_byte | columns data bytes]`.
+    let row_size = columns + 1;
+
+    let mut out = Vec::with_capacity(data.len());
+    let mut prev_row: Vec<u8> = vec![0u8; columns];
+    let mut cur_row: Vec<u8> = vec![0u8; columns];
+
+    let mut pos = 0usize;
+    while pos + row_size <= data.len() {
+        let filter_type = data[pos];
+        let row = &data[pos + 1..pos + 1 + columns];
+
+        for i in 0..columns {
+            let cur = row[i];
+            let left = if i > 0 { cur_row[i - 1] } else { 0 };
+            let above = prev_row[i];
+            let upper_left = if i > 0 { prev_row[i - 1] } else { 0 };
+
+            let reconstructed = match filter_type {
+                0 => cur,                                                        // None
+                1 => cur.wrapping_add(left),                                     // Sub
+                2 => cur.wrapping_add(above),                                    // Up
+                3 => cur.wrapping_add(((left as u16 + above as u16) / 2) as u8), // Average
+                4 => cur.wrapping_add(paeth(left, above, upper_left)),           // Paeth
+                _ => cur, // Unknown filter — fall back to None
+            };
+            cur_row[i] = reconstructed;
+        }
+
+        out.extend_from_slice(&cur_row);
+        std::mem::swap(&mut prev_row, &mut cur_row);
+
+        pos += row_size;
+    }
+
+    // Tolerate partial trailing row: append remaining bytes as-is.
+    if pos < data.len() {
+        out.extend_from_slice(&data[pos..]);
+    }
+
+    Ok(out)
+}
+
+/// Paeth predictor (PNG spec). Returns the predicted byte to add to the
+/// current byte to reconstruct the original.
+fn paeth(a: u8, b: u8, c: u8) -> u8 {
+    let a = a as i32;
+    let b = b as i32;
+    let c = c as i32;
+    let p = a + b - c;
+    let pa = (p - a).abs();
+    let pb = (p - b).abs();
+    let pc = (p - c).abs();
+    let result = if pa <= pb && pa <= pc {
+        a
+    } else if pb <= pc {
+        b
+    } else {
+        c
+    };
+    result as u8
+}
 
 /// Parse a standard (text-format) xref table.
 /// `data` is the entire file. `startxref_offset` is the byte offset of the "xref" keyword.
@@ -169,8 +266,8 @@ pub fn parse_xref_table(data: &[u8], startxref_offset: usize) -> ParseResult<Xre
 
     let (root, size, info, encrypt, encrypt_present, id_first) =
         extract_trailer_fields(trailer_dict)?;
+    let prev_offset = extract_prev_offset(trailer_dict);
 
-    // Merge entries (later xref sections override earlier ones via /Prev chain)
     Ok(XrefTable {
         entries: all_entries,
         root,
@@ -180,6 +277,7 @@ pub fn parse_xref_table(data: &[u8], startxref_offset: usize) -> ParseResult<Xre
         encrypt_present,
         trailer_offset: Some(startxref_offset),
         id_first,
+        prev_offset,
     })
 }
 
@@ -208,6 +306,7 @@ pub fn parse_xref_stream_obj(
             .iter()
             .any(|(k, v)| *k == b"Encrypt" && matches!(v, PdfObject::Dict(_)));
     let id_first = extract_id_first(stream_dict);
+    let prev_offset = extract_prev_offset(stream_dict);
 
     // Compute total entry count from /Index
     let total_count: u32 = index.iter().map(|(_, count)| count).sum();
@@ -243,6 +342,7 @@ pub fn parse_xref_stream_obj(
         encrypt_present,
         trailer_offset: None,
         id_first,
+        prev_offset,
     })
 }
 
@@ -337,6 +437,18 @@ fn extract_id_first(dict: &[(&[u8], PdfObject<'_>)]) -> Option<Vec<u8>> {
                 }
             }
             return None;
+        }
+    }
+    None
+}
+
+/// Extract the trailer `/Prev` field (byte offset of the previous xref
+/// section in an incrementally-updated PDF). Returns None when /Prev is
+/// absent or not an integer.
+fn extract_prev_offset(dict: &[(&[u8], PdfObject<'_>)]) -> Option<usize> {
+    for (k, v) in dict {
+        if *k == b"Prev" {
+            return v.as_i64().map(|n| n as usize);
         }
     }
     None
@@ -838,4 +950,123 @@ fn decode_ascii_hex(data: &[u8]) -> ParseResult<Vec<u8>> {
     }
 
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: encode `original` (a flat byte stream of `n_rows × columns`
+    /// bytes) using a single PNG filter, with per-row filter byte prefix.
+    fn encode_with_filter(original: &[u8], columns: usize, filter: u8) -> Vec<u8> {
+        assert!(original.len() % columns == 0);
+        let mut out = Vec::new();
+        let mut prev_row: Vec<u8> = vec![0u8; columns];
+        for row in original.chunks(columns) {
+            out.push(filter); // filter type byte
+                              // Encode each byte using the original row bytes for left context —
+                              // `left` must come from `row[i-1]`, not from a mutated buffer,
+                              // otherwise Up/Paeth roundtrips break.
+            for (i, &cur) in row.iter().enumerate() {
+                let left = if i > 0 { row[i - 1] } else { 0 };
+                let above = prev_row[i];
+                let upper_left = if i > 0 { prev_row[i - 1] } else { 0 };
+                let predicted = match filter {
+                    0 => cur,
+                    1 => cur.wrapping_sub(left),
+                    2 => cur.wrapping_sub(above),
+                    3 => cur.wrapping_sub(((left as u16 + above as u16) / 2) as u8),
+                    4 => cur.wrapping_sub(paeth(left, above, upper_left)),
+                    _ => cur,
+                };
+                out.push(predicted);
+            }
+            prev_row = row.to_vec();
+        }
+        out
+    }
+
+    #[test]
+    fn test_predictor_passthrough_for_low_values() {
+        let data = vec![1, 2, 3, 4, 5, 6];
+        assert_eq!(apply_png_predictor(&data, 3, 1).unwrap(), data);
+        assert_eq!(apply_png_predictor(&data, 3, 0).unwrap(), data);
+    }
+
+    #[test]
+    fn test_predictor_png_up_roundtrip() {
+        // 3 rows × 4 columns
+        let original = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+        let encoded = encode_with_filter(&original, 4, 2); // PNG Up
+        let decoded = apply_png_predictor(&encoded, 4, 12).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_predictor_png_sub_roundtrip() {
+        let original = vec![200, 100, 50, 25, 13, 6, 3, 1];
+        let encoded = encode_with_filter(&original, 4, 1); // PNG Sub
+        let decoded = apply_png_predictor(&encoded, 4, 11).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_predictor_png_paeth_roundtrip() {
+        let original: Vec<u8> = (0..16).map(|i| (i * 17) as u8).collect();
+        let encoded = encode_with_filter(&original, 4, 4); // PNG Paeth
+        let decoded = apply_png_predictor(&encoded, 4, 14).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_predictor_png_optimum_per_row_filter_byte() {
+        // Predictor 15 (PNG Optimum) reads the filter type from each row's
+        // prefix byte. Verify that per-row filter selection decodes correctly
+        // by manually constructing an encoded stream where each row uses a
+        // different filter against the same previous-row baseline.
+        //
+        // We rebuild the encoding inline rather than via encode_with_filter
+        // (which assumes one fixed filter per stream).
+        let original: Vec<u8> = (0..16).collect();
+        let columns = 4;
+        let mut encoded = Vec::new();
+        let mut prev_row: Vec<u8> = vec![0u8; columns];
+        let filters = [0u8, 2, 1, 4]; // None, Up, Sub, Paeth
+        for (row_idx, row) in original.chunks(columns).enumerate() {
+            let filter = filters[row_idx];
+            encoded.push(filter);
+            for (i, &cur) in row.iter().enumerate() {
+                let left = if i > 0 { row[i - 1] } else { 0 };
+                let above = prev_row[i];
+                let upper_left = if i > 0 { prev_row[i - 1] } else { 0 };
+                let predicted = match filter {
+                    0 => cur,
+                    1 => cur.wrapping_sub(left),
+                    2 => cur.wrapping_sub(above),
+                    3 => cur.wrapping_sub(((left as u16 + above as u16) / 2) as u8),
+                    4 => cur.wrapping_sub(paeth(left, above, upper_left)),
+                    _ => cur,
+                };
+                encoded.push(predicted);
+            }
+            prev_row = row.to_vec();
+        }
+        let decoded = apply_png_predictor(&encoded, columns, 15).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_predictor_handles_partial_trailing_row() {
+        // 1 full row + 2 partial bytes. The partial bytes get appended as-is.
+        let original = vec![10, 20, 30, 40];
+        let mut encoded = encode_with_filter(&original, 4, 0);
+        encoded.extend(&[99, 100]); // partial row, no filter byte
+        let decoded = apply_png_predictor(&encoded, 4, 10).unwrap();
+        assert_eq!(decoded, vec![10, 20, 30, 40, 99, 100]);
+    }
+
+    #[test]
+    fn test_predictor_zero_columns_errors() {
+        assert!(apply_png_predictor(&[1, 2, 3], 0, 12).is_err());
+    }
 }

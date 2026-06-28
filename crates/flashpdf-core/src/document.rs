@@ -1,8 +1,8 @@
 use crate::parser::object::{parse_object, parse_stream, Cursor, ParseError, ParseResult};
 use crate::parser::recovery::recover_xref_by_scan;
 use crate::parser::xref::{
-    decompress_stream, find_startxref, is_standard_xref, parse_objstm, parse_xref_stream_obj,
-    parse_xref_table, XrefEntryType, XrefTable,
+    apply_png_predictor, decompress_stream, find_startxref, is_standard_xref, parse_objstm,
+    parse_xref_stream_obj, parse_xref_table, XrefEntryType, XrefTable,
 };
 use crate::types::{ObjectId, PdfObject};
 use memmap2::Mmap;
@@ -242,9 +242,47 @@ impl Document {
         })
     }
 
-    /// Try to parse the xref at the given offset (table or stream).
-    /// Errors propagate as Err so the caller can fall back to recovery.
+    /// Try to parse the xref at the given offset (table or stream),
+    /// walking the `/Prev` chain to merge entries from earlier revisions
+    /// of incrementally-updated PDFs. Errors propagate as Err so the
+    /// caller can fall back to recovery.
     fn parse_xref_at(data: &[u8], xref_offset: usize) -> ParseResult<XrefTable> {
+        // Parse the newest section first to pick up its trailer metadata
+        // (Root, Size, Encrypt, ID) — those always come from the latest
+        // revision per PDF spec 7.5.6.
+        let mut newest = Self::parse_single_xref_section(data, xref_offset)?;
+        let mut merged = std::mem::take(&mut newest.entries);
+
+        // Walk /Prev chain. Entries seen first (in the newest section) win;
+        // older sections only fill in objects not present in newer ones.
+        // `visited` guards against pathological /Prev cycles.
+        let mut visited = std::collections::HashSet::new();
+        visited.insert(xref_offset);
+        let mut current = newest.prev_offset;
+        let mut guard = 0u32;
+        const MAX_PREV_DEPTH: u32 = 100;
+        while let Some(off) = current {
+            if !visited.insert(off) || guard >= MAX_PREV_DEPTH {
+                break;
+            }
+            guard += 1;
+            let table = match Self::parse_single_xref_section(data, off) {
+                Ok(t) => t,
+                Err(_) => break, // tolerate a broken /Prev link
+            };
+            for (obj_num, entry) in table.entries {
+                merged.entry(obj_num).or_insert(entry);
+            }
+            current = table.prev_offset;
+        }
+
+        newest.entries = merged;
+        Ok(newest)
+    }
+
+    /// Parse a single xref section (no /Prev walking). Used internally by
+    /// `parse_xref_at` for each link in the chain.
+    fn parse_single_xref_section(data: &[u8], xref_offset: usize) -> ParseResult<XrefTable> {
         if is_standard_xref(data, xref_offset) {
             return parse_xref_table(data, xref_offset);
         }
@@ -257,14 +295,52 @@ impl Document {
             .iter()
             .find(|(k, _)| *k == b"Filter")
             .map(|(_, v)| v.clone());
-        let stream_data: Vec<u8> = match filter {
+        let mut stream_data: Vec<u8> = match filter {
             Some(f) => decompress_stream(raw_stream_data, &f)?,
             None => raw_stream_data.to_vec(),
         };
+
+        // Apply PNG predictor if /DecodeParms specifies one. Without this,
+        // xref streams with /Predictor 12 (PNG Up — extremely common for
+        // modern PDFs) yield mostly-garbage Compressed entries that point
+        // at nonexistent object streams, silently losing every ObjStm-
+        // resident page object. See PDF spec 7.4.4.4.
+        if let Some(decode_parms) = dict
+            .iter()
+            .find(|(k, _)| *k == b"DecodeParms")
+            .map(|(_, v)| v)
+        {
+            stream_data = Self::apply_decode_parms(&stream_data, decode_parms)?;
+        }
+
         parse_xref_stream_obj(&dict, &stream_data)
     }
 
-    /// Get the document catalog (root) object.
+    /// Apply /DecodeParms (predictor + columns) to a decoded xref stream
+    /// payload. For xref streams, /DecodeParms is always a single dict;
+    /// arrays only appear for multi-filter image streams (not handled here).
+    /// /Predictor defaults to 1 (no prediction); values 10-15 select the
+    /// PNG predictor family (PDF spec 7.4.4.4).
+    fn apply_decode_parms(data: &[u8], parms: &PdfObject<'_>) -> ParseResult<Vec<u8>> {
+        let dict = match parms {
+            PdfObject::Dict(d) => d,
+            _ => return Ok(data.to_vec()),
+        };
+        let predictor = dict
+            .iter()
+            .find(|(k, _)| *k == b"Predictor")
+            .and_then(|(_, v)| v.as_i64())
+            .unwrap_or(1) as u8;
+        if predictor < 10 {
+            return Ok(data.to_vec());
+        }
+        let columns = dict
+            .iter()
+            .find(|(k, _)| *k == b"Columns")
+            .and_then(|(_, v)| v.as_i64())
+            .unwrap_or(1) as usize;
+        apply_png_predictor(data, columns, predictor)
+    }
     pub fn root(&self) -> ParseResult<PdfObject<'static>> {
         self.get_object(self.xref.root.num)
     }
@@ -465,6 +541,13 @@ impl Document {
     }
 
     /// Get the page count from the page tree.
+    ///
+    /// Three-tier resolution mirroring `extract_doc`:
+    /// 1. Top-level `/Count` field (cheapest — one object lookup)
+    /// 2. Walk `/Kids` recursively via `page_refs().len()` (correct for
+    ///    nested page trees where `/Count` lives on inner nodes)
+    /// 3. xref scan for `/Type /Page` via `recover_page_refs().len()`
+    ///    (last resort for malformed PDFs without a working `/Pages` chain)
     pub fn page_count(&self) -> ParseResult<u32> {
         let root = self.root()?;
         let pages_ref = root
@@ -476,11 +559,19 @@ impl Document {
             ))?;
 
         let pages = self.get_object(pages_ref.num)?;
-        pages
-            .get(b"Count")
-            .and_then(|c| c.as_i64())
-            .map(|n| n as u32)
-            .ok_or(ParseError::Message("missing /Count in Pages".to_string()))
+        if let Some(n) = pages.get(b"Count").and_then(|c| c.as_i64()) {
+            return Ok(n as u32);
+        }
+
+        // Fallback 1: walk Kids recursively.
+        if let Ok(refs) = self.page_refs() {
+            if !refs.is_empty() {
+                return Ok(refs.len() as u32);
+            }
+        }
+
+        // Fallback 2: xref scan for /Type /Page.
+        Ok(self.recover_page_refs().len() as u32)
     }
 
     /// Iterate over page object references.
@@ -507,34 +598,60 @@ impl Document {
     }
 
     /// Fallback when the page tree is broken: scan every xref entry for
-    /// objects whose /Type is /Page and return them in file-offset order.
+    /// objects whose /Type is /Page and return them in document order.
     ///
     /// The PDF spec guarantees /Type /Page identifies page nodes, so even
     /// without a working /Pages /Kids chain we can find them by exhaustive
-    /// scan. PDFs typically emit pages in document order, so byte-offset
-    /// sort approximates the intended reading order.
+    /// scan. Handles two entry types:
+    /// - **Uncompressed** entries: page object lives at a byte offset.
+    ///   Sort key = byte offset.
+    /// - **Compressed** entries (inside an ObjStm, PDF spec 7.6.2): page
+    ///   object lives inside an object stream. Sort key = (containing
+    ///   ObjStm's byte offset, index within the ObjStm). Without this
+    ///   branch, modern PDFs that pack pages into ObjStm (Word/Office
+    ///   exports, recent Acrobat output) lose all their pages.
     ///
     /// Used by `extract_doc` when `page_refs()` fails. Catches the "missing
     /// /Pages in catalog" and "missing /Kids in Pages" failure modes that
-    /// account for ~11 of the 46 ValueError files in the PyMuPDF corpus
-    /// (mostly Word/Office exports + bug-regression PDFs with deliberately
-    /// corrupt page trees).
+    /// account for the page-tree bug-regression PDFs in the PyMuPDF corpus.
     pub fn recover_page_refs(&self) -> Vec<ObjectId> {
-        let mut found: Vec<(usize, ObjectId)> = Vec::new();
+        // Map ObjStm object number → its byte offset, so we can sort
+        // Compressed-page entries by where their containing ObjStm lives.
+        let mut objstm_byte_offset: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
         for (&obj_num, entry) in self.xref.entries.iter() {
-            if entry.entry_type != XrefEntryType::Uncompressed {
-                // Compressed entries have no byte offset; skip — they're rare
-                // for page objects anyway (pages are usually top-level).
-                continue;
+            if entry.entry_type == XrefEntryType::Uncompressed {
+                objstm_byte_offset.insert(obj_num, entry.field1 as usize);
             }
-            // Cheap pre-filter: only attempt parse if the bytes near the
-            // offset even contain "/Type". Avoids parsing the whole xref.
-            let offset = entry.field1 as usize;
-            let window_end = (offset + 2048).min(self.mmap.len());
-            let window = &self.mmap[offset..window_end];
-            if memchr::memchr(b'/', window).is_none() {
-                continue;
-            }
+        }
+
+        // Sort key: (byte_offset_for_ordering, tiebreaker_within_container).
+        // For Uncompressed: (real_byte_offset, 0).
+        // For Compressed: (ObjStm byte offset, index within ObjStm).
+        let mut found: Vec<(usize, u16, ObjectId)> = Vec::new();
+        for (&obj_num, entry) in self.xref.entries.iter() {
+            let (sort_offset, tiebreaker) = match entry.entry_type {
+                XrefEntryType::Uncompressed => {
+                    let offset = entry.field1 as usize;
+                    // Cheap pre-filter: skip if no "/" appears in the 2KB
+                    // window starting at the offset. Avoids a full parse of
+                    // every object in the file.
+                    let window_end = (offset + 2048).min(self.mmap.len());
+                    if offset >= self.mmap.len()
+                        || memchr::memchr(b'/', &self.mmap[offset..window_end]).is_none()
+                    {
+                        continue;
+                    }
+                    (offset, 0u16)
+                }
+                XrefEntryType::Compressed => {
+                    let objstm_num = entry.field1;
+                    let index_within = entry.field2;
+                    let base = objstm_byte_offset.get(&objstm_num).copied().unwrap_or(0);
+                    (base, index_within)
+                }
+                XrefEntryType::Free => continue,
+            };
             if let Ok(obj) = self.get_object(obj_num) {
                 let is_page = obj
                     .get(b"Type")
@@ -542,18 +659,18 @@ impl Document {
                     .map(|n| n == b"Page")
                     .unwrap_or(false);
                 if is_page {
-                    found.push((
-                        offset,
-                        ObjectId {
-                            num: obj_num,
-                            gen: entry.field2,
-                        },
-                    ));
+                    // Compressed objects always have generation 0 (PDF spec
+                    // 7.6.2); for Uncompressed entries, field2 is the real gen.
+                    let gen = match entry.entry_type {
+                        XrefEntryType::Compressed => 0,
+                        _ => entry.field2,
+                    };
+                    found.push((sort_offset, tiebreaker, ObjectId { num: obj_num, gen }));
                 }
             }
         }
-        found.sort_by_key(|(off, _)| *off);
-        found.into_iter().map(|(_, id)| id).collect()
+        found.sort_by_key(|(off, tie, _)| (*off, *tie));
+        found.into_iter().map(|(_, _, id)| id).collect()
     }
 
     /// Get the xref table (for debugging/inspection).

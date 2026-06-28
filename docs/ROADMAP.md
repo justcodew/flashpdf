@@ -426,6 +426,44 @@ flashpdf toc paper.pdf                        # 打印目录
 
 ---
 
+## v0.7.x 增量
+
+### v0.7.1 — 页面渲染（PDFium）
+
+- 通过 `pdfium-render` 集成 PDFium，作为可选 `render` Cargo feature
+- `page.get_pixmap(dpi=150, output=None)` 返回 PNG bytes
+- PDFium binary 通过 `PDFIUM_PATH` / `./pdfium-bin/` / system library 三段回退加载
+- `open(path, render_only=True)` 跳过文本提取，专为渲染场景省时间
+- 详见 [RENDERING.md](RENDERING.md)、[BENCHMARK_RENDER.md](BENCHMARK_RENDER.md)
+- **当前在 `feature/render` 分支，未合并 main**
+
+### v0.7.2 — 内联图像（BI/ID/EI）
+
+- 解析 PDF spec §8.9.7 的 inline image 操作符
+- inline 图像进入 `page.get_images()`（`name="inline"`）
+- `page.diagnostics.inline_image_count` 暴露每页计数
+- `is_scanned` 启发式纳入 inline 图像，避免扫描页误判
+- 5 个单元测试 + 与 fitz 在 test_2635.pdf 上交叉验证
+
+### v0.7.3 — 11 个 page-tree bug 修复（165/165 渲染零失败）
+
+v0.7.1 的渲染基准在 PyMuPDF 165-PDF 语料上有 11 个 PDF 渲染失败。根因是 3 个
+独立的 xref/page-tree 解析 bug：
+
+1. **`/Prev` 链不跟随**：incremental-update PDF 只有最新 xref 段被读。
+   影响：`widgettest.pdf`, `test_3624.pdf`, `test_3848.pdf` 等
+2. **xref stream 的 PNG predictor 不解码**：现代 PDF 几乎全用 `/Predictor 12`
+   （PNG Up），原代码 Flate 解压后直接当 entry 字节解析 → Compressed entries
+   指向不存在的 ObjStm。影响：`test_2710.pdf`, `test_3058.pdf` 等 8 个
+3. **`recover_page_refs` 跳过 Compressed entries**：上述 (2) 修好后，page refs
+   fallback 还需要扫 ObjStm 里的 page 对象
+
+修复后 165/165 全部成功，速度领先不变（25ms p50 vs liteparse 33ms）。带 7 个
+PNG predictor 单元测试防回归。详见 [LIMITATIONS.md §10](LIMITATIONS.md#10-已知-bug--待修)
+和 [CHANGELOG 0.7.3](../CHANGELOG.md#073---2026-06-28)。
+
+---
+
 ## 横切关注点
 
 每个版本都要做的，不单独成 phase：
@@ -483,12 +521,17 @@ flashpdf 遵循 SemVer，但**按库而非按应用**解释：
 
 | 功能 | 不做的原因 | 替代方案 |
 |------|----------|---------|
-| **页面渲染** (`get_pixmap()`) | 需要完整 PDF interpreter + 光栅化器，与"纯解析"设计相悖 | PyMuPDF / ritz / GoMuPDF |
 | **OCR** | 需要训练模型 + GPU，与"轻量零依赖"目标相悖 | Tesseract / PaddleOCR（flashpdf 可输出图像字节供它们用） |
 | **PDF 编辑 / 生成** | flashpdf 是 read-only 提取器 | reportlab / fpdf2 / PyPDF |
 | **注释 / 表单填写** | 写操作需要完整 PDF 对象图，与提取目标正交 | PyMuPDF / pypdf |
-| **矢量图光栅化** | 同"渲染"，需要光栅化器 | PyMuPDF |
+| **矢量路径数据提取**（path 坐标 / 曲线参数）| text-extraction 核心不解析 path 算子；PDFium 渲染时会把矢量图完整光栅化进 PNG（`get_pixmap()` 输出包含全部矢量内容），但不暴露 path 坐标 | PyMuPDF（`page.get_drawings()`）|
 | **GPU 加速** | JPEG/DEFLATE 硬解 ROI 不明，依赖链爆炸 | CPU 已经够快（corpus 平均 2.98ms） |
+
+> **页面渲染** 之前列在 Non-goals，已在 `feature/render` 分支用 PDFium 解除——
+> `page.get_pixmap()` 通过 `pdfium-render` 调用 PDFium C ABI 输出 PNG，
+> 作为可选 Cargo feature + PDFium binary，不污染纯解析路径。
+> 详见 [docs/RENDERING.md](RENDERING.md) 和 [docs/BENCHMARK_RENDER.md](BENCHMARK_RENDER.md)。
+> 矢量**图**光栅化已通过 PDFium 渲染解决；矢量**路径数据**提取（path 坐标）、OCR、编辑类仍然不做。
 
 **判断标准**：任何新功能要回答"这要不要 GPU/渲染器/写操作"。要的话不做。
 
@@ -535,3 +578,5 @@ flashpdf 当前**只承诺 Python API 稳定性**。Rust 侧（`flashpdf-core` c
 | 2026-06-27 | **char_sim 目标改为"单调增长 + 残差报告"** | 预先承诺 ≥97% 可能在根本性差异（fitz 输出 control char）前翻车；诚实目标更重要 |
 | 2026-06-27 | **bench regression check 从 Phase 1 上线** | 性能预算每个 PR 都要守，不是 Phase 4 才自动化；避免回归悄悄累积 |
 | 2026-06-27 | **Rust API 暂不承诺稳定** | `flashpdf-core` 是内部 crate，公开 rustdoc 推迟到 Phase 1-2 完成后 |
+| 2026-06-27 | **页面渲染解除 Non-goal** | PDFium 通过动态 FFI + 可选 Cargo feature，不污染纯解析路径；保留矢量光栅化/OCR/编辑作为 Non-goals |
+| 2026-06-27 | **支持 inline image** | BI/ID/EI 是合法 PDF 操作符，与"嵌入位图提取"主路径同源；进入同一 `images` 数组，diagnostics 计数暴露 |

@@ -30,6 +30,20 @@ dependencies = [
     "click>=8.0",
 ]
 
+# Render-feature distribution: strategy (a) — single wheel bundles PDFium.
+# `pip install flashpdf` ships the render-enabled build with PDFium binary
+# under `flashpdf/_pdfium/`. The binary is added to that directory by the
+# render-wheels.yml CI job before maturin builds; source/dev builds without
+# `--features render` produce a smaller text-only wheel.
+# See docs/RENDER_DEPLOYMENT.md for the comparison with strategies (b)/(c).
+
+[project.urls]
+Homepage = "https://github.com/justcodew/flashpdf"
+Repository = "https://github.com/justcodew/flashpdf"
+Documentation = "https://github.com/justcodew/flashpdf/tree/main/docs"
+Changelog = "https://github.com/justcodew/flashpdf/blob/main/CHANGELOG.md"
+Issues = "https://github.com/justcodew/flashpdf/issues"
+
 [project.scripts]
 flashpdf = "flashpdf.cli:main"
 
@@ -37,6 +51,13 @@ flashpdf = "flashpdf.cli:main"
 features = ["pyo3/extension-module"]
 manifest-path = "crates/flashpdf-py/Cargo.toml"
 python-source = "python"
+# When CI pre-populates python/flashpdf/_pdfium/<lib> before building, maturin
+# pulls it into the wheel alongside the .so extension. The runtime lookup in
+# crates/flashpdf-core/src/render.rs finds it via flashpdf.__file__ sibling.
+# Missing dir (text-only build) is fine — glob matches nothing.
+include = [
+    { path = "python/flashpdf/_pdfium/**/*", format = "wheel" },
+]
 
 [tool.maturin.target.'cfg(target_os = "linux")']
 manylinux = "auto"

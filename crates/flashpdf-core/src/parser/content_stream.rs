@@ -80,6 +80,12 @@ pub struct ContentResult {
     /// Bytes that could not be mapped to Unicode (emitted as U+FFFD).
     /// Indicates missing /ToUnicode or /Encoding on the font.
     pub undecoded_byte_count: usize,
+    /// Number of inline images encountered (BI/ID/EI operators, PDF spec §8.9.7).
+    /// Inline images are pixel data embedded directly in the content stream
+    /// (no /XObject reference). Tracked for diagnostics — they're added to
+    /// `images` with `name = "inline"`, but `is_scanned` detection also
+    /// relies on this counter to flag inline-only scanned pages.
+    pub inline_image_count: usize,
 }
 
 // ─── Operator stack value ───
@@ -262,6 +268,14 @@ pub fn scan_content_stream(data: &[u8]) -> ContentResult {
             }
             let op = &data[op_start..pos];
 
+            // BI = Begin Inline Image — handle as a special case (image data
+            // between ID and EI is binary and can't go through normal loop).
+            if op == b"BI" {
+                parse_inline_image(data, &mut pos, &state, &mut result);
+                operands.clear();
+                continue;
+            }
+
             execute_operator(op, &operands, &mut state, &mut result, &HashMap::new());
             operands.clear();
         } else {
@@ -329,6 +343,16 @@ pub fn scan_content_stream_full(
             }
             let op = &data[op_start..pos];
 
+            // BI = Begin Inline Image — special case: consume the entire
+            // BI/ID/EI block in one go. The image data between ID and EI is
+            // arbitrary binary (may contain operator-looking bytes), so we
+            // can't feed it through the normal operator loop.
+            if op == b"BI" {
+                parse_inline_image(data, &mut pos, &state, &mut result);
+                operands.clear();
+                continue;
+            }
+
             execute_operator_full(
                 op,
                 &operands,
@@ -347,6 +371,107 @@ pub fn scan_content_stream_full(
     }
 
     result
+}
+
+/// Parse an inline image starting just after the `BI` operator.
+///
+/// Grammar (PDF spec §8.9.7):
+/// ```text
+/// BI <key-value-pairs> ID <single-whitespace> <binary-data> EI
+/// ```
+///
+/// - Keys are abbreviated names (/W, /H, /BPC, /CS, /F, ...) but for
+///   our purposes we don't decode them — we only capture existence + bbox.
+/// - After `ID`, exactly ONE whitespace byte precedes the image data.
+/// - Image data is binary and may contain bytes that look like `EI`.
+///   The spec requires looking for whitespace + "EI" + whitespace to
+///   disambiguate. We use a 2-byte-lookahead scan: detect `EI` only when
+///   preceded by whitespace and followed by whitespace or EOF.
+///
+/// On success, pushes an `ImageRef { name: "inline", ... }` into `result.images`,
+/// bumps `result.inline_image_count`, and advances `*pos` past the EI.
+/// On malformed input (no ID found, no EI terminator), advances conservatively
+/// to avoid an infinite loop but does not push an ImageRef.
+fn parse_inline_image(data: &[u8], pos: &mut usize, state: &TextState, result: &mut ContentResult) {
+    // 1. Skip key-value pairs until we hit the ID operator.
+    //    Keys are /Name, values are names/numbers/arrays. We don't care about
+    //    their content — just find the ID operator that separates params
+    //    from image data.
+    let mut id_pos = *pos;
+    let mut found_id = false;
+    while id_pos + 1 < data.len() {
+        // Look for "ID" as a standalone operator: must be preceded by
+        // whitespace (or BOF after BI) and followed by whitespace.
+        if data[id_pos] == b'I' && data[id_pos + 1] == b'D' {
+            let prev_ok = id_pos == 0
+                || matches!(
+                    data[id_pos - 1],
+                    b' ' | b'\t' | b'\n' | b'\r' | b'\x00' | b'/'
+                );
+            let next_ok = id_pos + 2 >= data.len()
+                || matches!(data[id_pos + 2], b' ' | b'\t' | b'\n' | b'\r' | b'\x00');
+            if prev_ok && next_ok {
+                found_id = true;
+                break;
+            }
+        }
+        id_pos += 1;
+    }
+    if !found_id {
+        // Malformed — bail without producing an image, but advance to avoid
+        // an infinite loop in the caller.
+        *pos = data.len();
+        return;
+    }
+
+    // 2. Skip the ID operator + exactly ONE whitespace byte (PDF spec requirement).
+    let mut data_start = id_pos + 2;
+    if data_start < data.len() && matches!(data[data_start], b' ' | b'\t' | b'\n' | b'\r' | b'\x00')
+    {
+        data_start += 1;
+    }
+
+    // 3. Scan for the EI terminator. The classic ambiguity: image bytes can
+    //    contain "EI" sequences. The spec's resolution: EI must be recognized
+    //    only when preceded by whitespace and followed by whitespace/EOF.
+    //    This is the same heuristic MuPDF uses.
+    let mut ei_pos = data_start;
+    let mut found_ei = false;
+    while ei_pos + 1 < data.len() {
+        if data[ei_pos] == b'E' && data[ei_pos + 1] == b'I' {
+            let prev_ws = ei_pos > data_start
+                && matches!(data[ei_pos - 1], b' ' | b'\t' | b'\n' | b'\r' | b'\x00');
+            let next_ws = ei_pos + 2 >= data.len()
+                || matches!(data[ei_pos + 2], b' ' | b'\t' | b'\n' | b'\r' | b'\x00');
+            if prev_ws && next_ws {
+                found_ei = true;
+                break;
+            }
+        }
+        ei_pos += 1;
+    }
+
+    if !found_ei {
+        // No terminator — malformed. Bail.
+        *pos = data.len();
+        return;
+    }
+
+    // 4. Build an ImageRef. The image occupies the unit square [0,0,1,1] in
+    //    content-stream space (same convention as image XObjects), so we
+    //    map it through the current CTM to get device-space bbox. Same
+    //    approach as the Do-operator image case.
+    let (x0, y0) = state.ctm.apply(0.0, 0.0);
+    let (x1, y1) = state.ctm.apply(1.0, 1.0);
+    result.images.push(ImageRef {
+        name: "inline".to_string(),
+        bbox: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)],
+        obj_ref: None,
+    });
+    result.inline_image_count += 1;
+
+    // 5. Advance past the EI operator.
+    *pos = ei_pos + 2;
 }
 
 fn skip_ws_and_comments(data: &[u8], pos: &mut usize) {
@@ -819,9 +944,11 @@ fn execute_operator_full(
                         }
 
                         // Merge diagnostics counters from the recursive scan
-                        // so Type3 / undecoded counts bubble up to the caller.
+                        // so Type3 / undecoded / inline-image counts bubble
+                        // up to the caller.
                         result.type3_char_count += form_result.type3_char_count;
                         result.undecoded_byte_count += form_result.undecoded_byte_count;
+                        result.inline_image_count += form_result.inline_image_count;
 
                         // Restore graphics state
                         state.restore_gs();
@@ -1123,6 +1250,59 @@ mod tests {
         let result = scan_content_stream(content);
         assert_eq!(result.images.len(), 1);
         assert_eq!(result.images[0].name, "Im1");
+    }
+
+    #[test]
+    fn test_inline_image_basic() {
+        // BI ... ID <single ws> <data> EI
+        // Image data is 6 bytes of dummy pixel data. The "EI" inside the
+        // data should NOT be recognized as a terminator (no surrounding ws).
+        let content = b"q 100 0 0 100 0 0 cm BI /W 2 /H 1 /BPC 8 /CS /G ID \xff\xfeEI\x00\x01 EI Q";
+        let result = scan_content_stream(content);
+        assert_eq!(
+            result.inline_image_count, 1,
+            "should detect one inline image"
+        );
+        assert_eq!(result.images.len(), 1);
+        assert_eq!(result.images[0].name, "inline");
+        // CTM scales the unit square by 100, so bbox should be ~[0,0,100,100]
+        let bbox = result.images[0].bbox;
+        assert!((bbox[2] - bbox[0] - 100.0).abs() < 1.0, "width: {bbox:?}");
+        assert!((bbox[3] - bbox[1] - 100.0).abs() < 1.0, "height: {bbox:?}");
+    }
+
+    #[test]
+    fn test_inline_image_ei_in_data_with_whitespace() {
+        // The "EI" in data IS treated as terminator when surrounded by ws.
+        // This is the spec-correct behavior and matches MuPDF.
+        let content = b"BI /W 2 /H 1 /BPC 8 /CS /G ID \xff\xfe EI garbage";
+        let result = scan_content_stream(content);
+        assert_eq!(result.inline_image_count, 1);
+    }
+
+    #[test]
+    fn test_inline_image_missing_id() {
+        // Malformed: no ID operator → no image pushed, no infinite loop.
+        let content = b"BI /W 2 /H 1 no_id_here BT /F1 12 Tf (text) Tj ET";
+        let result = scan_content_stream(content);
+        assert_eq!(result.inline_image_count, 0);
+        assert_eq!(result.images.len(), 0);
+    }
+
+    #[test]
+    fn test_inline_image_missing_ei() {
+        // Malformed: no EI terminator → bail without producing image.
+        let content = b"BI /W 2 /H 1 /BPC 8 ID \xff\xfe\xff\xfe\xff";
+        let result = scan_content_stream(content);
+        assert_eq!(result.inline_image_count, 0);
+    }
+
+    #[test]
+    fn test_multiple_inline_images() {
+        let content = b"q 50 0 0 50 0 0 cm BI /W 1 /H 1 /BPC 8 /CS /G ID \xff EI Q q 50 0 0 50 100 0 cm BI /W 1 /H 1 /BPC 8 /CS /G ID \xfe EI Q";
+        let result = scan_content_stream(content);
+        assert_eq!(result.inline_image_count, 2);
+        assert_eq!(result.images.len(), 2);
     }
 
     #[test]

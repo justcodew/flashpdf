@@ -1,0 +1,27 @@
+flashpdf
+========
+
+This product is licensed under the MIT License (see [LICENSE](./LICENSE)).
+
+When built with the optional `render` Cargo feature, this product also
+distributes the following third-party assets:
+
+1. **PDFium binary** (`libpdfium.so` / `libpdfium.dylib` / `pdfium.dll`)
+   - Copyright 2014 The PDFium Authors (Google Inc.)
+   - License: BSD-3-Clause — see [LICENSES/LICENSE-PDFium.txt](./LICENSES/LICENSE-PDFium.txt)
+   - Source: https://github.com/bblanchon/pdfium-binaries (convenience mirror
+     of https://pdfium.googlesource.com/pdfium)
+   - Distribution: bundled inside the platform wheel when the `render`
+     feature is enabled. Not used by the default (text-only) build.
+
+2. **pdfium-render** (Rust crate, link-time dependency)
+   - Copyright (c) 2024 Alister Lee
+   - License: MIT — see [LICENSES/LICENSE-pdfium-render.txt](./LICENSES/LICENSE-pdfium-render.txt)
+   - Source: https://crates.io/crates/pdfium-render
+   - Distribution: statically linked into the wheel when the `render`
+     feature is enabled.
+
+When the `render` feature is **disabled** (the default for source builds
+without `--features render`), neither PDFium nor pdfium-render is included.
+In that mode flashpdf is a pure MIT-licensed Rust library with no
+third-party binary assets.
