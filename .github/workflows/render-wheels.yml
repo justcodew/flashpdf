@@ -1,8 +1,7 @@
 # Build render-enabled wheels (bundled PDFium binary)
 #
-# Status: ACTIVE for manual runs (workflow_dispatch). Wired so that once
-# the smoke tests are green across all 5 platforms, it can be folded into
-# the tag-triggered publish pipeline alongside build-wheels.yml.
+# Status: ACTIVE for manual runs (workflow_dispatch). Ready to be folded
+# into the tag-triggered publish pipeline alongside build-wheels.yml.
 #
 # Bundling strategy (chosen 2026-06-28):
 #   - CI downloads the platform PDFium binary from bblanchon/pdfium-binaries
@@ -82,11 +81,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        # TEMPORARY (until feature/render merges to main): pin checkout to
-        # the feature branch so this workflow, which lives on main, tests
-        # the feature branch's code. Drop the `with: ref:` block after merge.
-        with:
-          ref: feature/render
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
