@@ -312,6 +312,7 @@ cargo bench -p flashpdf-core   # 性能基准
 
 `memchr`（SIMD 扫描）· `flate2`（zlib）· `memmap2`（mmap）· `rayon`（并行）·
 `pyo3`（Python 绑定）· `fast-float2` · `crc32fast` · `fnv` · `smallvec`
+· `pdfium-render`（可选 `render` feature，PDFium 渲染后端）
 
 ## 路线图
 
@@ -320,6 +321,9 @@ cargo bench -p flashpdf-core   # 性能基准
 - [x] **v0.5.0** 适用面扩大：加密 PDF · 错误信息 · examples · 迁移指南
 - [x] **v0.6.0** 精度深挖：Type3 · 竖排文本 · char_sim 残差
 - [x] **v0.7.0** 规模化：~~扩语料~~（跳过） · tiny 性能 · logging · PERFORMANCE.md
+- [x] **v0.7.1** 渲染：PDFium `render` feature · `get_pixmap` · `render_only`
+- [x] **v0.7.2** 内联图像：BI/ID/EI · `inline_image_count` 诊断
+- [x] **v0.7.3** page-tree bug fix：165/165 渲染零失败（`/Prev` 链 + PNG predictor + Compressed entries）
 
 详见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 

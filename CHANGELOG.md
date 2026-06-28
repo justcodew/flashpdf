@@ -1,5 +1,85 @@
 # Changelog
 
+## [0.7.3] - 2026-06-28
+
+11 个 page-tree bug 修复 —— 165/165 渲染零失败。
+
+### Fixed
+
+3 个独立的 xref/page-tree 解析 bug（在 PyMuPDF bug-regression 165-PDF 语料上
+导致 v0.7.1/v0.7.2 有 11 个 PDF 渲染失败）：
+
+- **`/Prev` 链不跟随**（影响 `widgettest.pdf`, `test_3624.pdf`, `test_3848.pdf`
+  等）：incremental-update PDF 只有最新 xref 段被读，`/Prev` 指向的旧段被丢弃。
+  修复：`Document::parse_xref_at` 走 `/Prev` 链合并 entries（newest 胜出，
+  cycle guard + max depth 100）。
+- **xref stream 的 PNG predictor 不解码**（影响 `test_2710.pdf`, `test_3058.pdf`,
+  `test_4079.pdf`, `test_4755.pdf`, `test_toc_count.pdf`, `v110-changes.pdf`,
+  `test-3820.pdf`, `test_annot_file_info.pdf`）：现代 PDF 的 xref stream 几乎全用
+  `/Predictor 12`（PNG Up）。原代码 Flate 解压后直接当 entry 字节解析。
+  修复：新增 `apply_png_predictor`，按 PNG 行格式（每行 1 字节 filter + Columns
+  数据）反预测。关键：现实世界 PDF 即使 /Predictor 是 10-14 也用每行 filter byte
+  的 PNG 格式（pdfium / PyMuPDF 行为一致）。
+- **`recover_page_refs` 跳过 Compressed entries**：上述 predictor 修好后，page
+  refs fallback 还需要扫 ObjStm 里的 page 对象。修复：扩展 `recover_page_refs`
+  同时处理 Uncompressed + Compressed entries，按 (ObjStm byte offset, index within)
+  排序。
+
+### Tests
+
+- 7 个 PNG predictor 单元测试（None/Sub/Up/Average/Paeth roundtrip + 边缘 case）
+
+### Docs
+
+- LIMITATIONS §10、BENCHMARK_FULL §2.5/§3、BENCHMARK_RENDER：把"11 个 PDF 渲染失败"
+  更新为"165/165 零失败"，速度领先不变（flashpdf 25ms vs liteparse 33ms）
+
+---
+
+## [0.7.2] - 2026-06-28
+
+内联图像（BI/ID/EI）解析。
+
+### Added
+
+- 解析 PDF spec §8.9.7 的 inline image 操作符
+- inline 图像进入 `page.get_images()`（`name="inline"`）
+- `page.diagnostics.inline_image_count` 暴露每页计数
+- `is_scanned` 启发式纳入 inline 图像，避免扫描页误判
+
+### Tests
+
+- 5 个单元测试 + 与 fitz 在 `test_2635.pdf` 上交叉验证
+
+---
+
+## [0.7.1] - 2026-06-27
+
+可选的 PDFium 渲染后端（`render` Cargo feature）。
+
+### Added
+
+- 通过 `pdfium-render` Rust crate 集成 PDFium，作为可选 `render` Cargo feature
+- `page.get_pixmap(dpi=150, output=None) -> PNG bytes`
+- PDFium binary 三段回退加载：`PDFIUM_PATH` env → `./pdfium-bin/` → system library
+- `open(path, render_only=True)` 跳过 eager 文本提取，专为纯渲染场景省时间
+- 不带 `render` feature 编译时 `get_pixmap()` 抛 `NotImplementedError`（保持 API
+  可发现性）
+
+### Docs
+
+- `docs/RENDERING.md`：本地开发如何下 PDFium binary、设 env、跑 smoke test
+- `docs/BENCHMARK_RENDER.md`：vs fitz / pypdfium2 的渲染基准（flashpdf 3.09s vs
+  fitz 9.17s vs pypdfium2 5.74s，corpus 总耗时）
+
+### Notes
+
+- **当前在 `feature/render` 分支，未合并 main**
+- Wheel CI/CD（多平台 PDFium binary 打包）留到合并前
+- `pip install "flashpdf[render]"` extras 留到合并前
+
+---
+
 ## [0.7.0] - 2026-06-27
 
 Phase 4 完成 —— 规模化验证。logging + 性能文档。

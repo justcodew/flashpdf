@@ -30,7 +30,7 @@ flashpdf 在 v0.7 之后引入了**可选的 PDFium 渲染后端**（`render` Ca
 - **pypdfium2**: 最新 PyPI
 - **PDFium binary**: chromium/7906，arm64 macOS
 - **样本**: PyMuPDF 测试集的 165-PDF bug-regression 语料
-  （`pymupdf/tests/resources`），165 个成功（v0.7.2 修了 v0.7.1 的 11 个 page-tree
+  （`pymupdf/tests/resources`），165 个成功（v0.7.3 修了 v0.7.1 的 11 个 page-tree
   bug；pypdfium2 / PyMuPDF 一直 165/165）
 
 ## 第一轮：默认 API 路径（端到端）

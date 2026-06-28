@@ -445,6 +445,23 @@ flashpdf toc paper.pdf                        # 打印目录
 - `is_scanned` 启发式纳入 inline 图像，避免扫描页误判
 - 5 个单元测试 + 与 fitz 在 test_2635.pdf 上交叉验证
 
+### v0.7.3 — 11 个 page-tree bug 修复（165/165 渲染零失败）
+
+v0.7.1 的渲染基准在 PyMuPDF 165-PDF 语料上有 11 个 PDF 渲染失败。根因是 3 个
+独立的 xref/page-tree 解析 bug：
+
+1. **`/Prev` 链不跟随**：incremental-update PDF 只有最新 xref 段被读。
+   影响：`widgettest.pdf`, `test_3624.pdf`, `test_3848.pdf` 等
+2. **xref stream 的 PNG predictor 不解码**：现代 PDF 几乎全用 `/Predictor 12`
+   （PNG Up），原代码 Flate 解压后直接当 entry 字节解析 → Compressed entries
+   指向不存在的 ObjStm。影响：`test_2710.pdf`, `test_3058.pdf` 等 8 个
+3. **`recover_page_refs` 跳过 Compressed entries**：上述 (2) 修好后，page refs
+   fallback 还需要扫 ObjStm 里的 page 对象
+
+修复后 165/165 全部成功，速度领先不变（25ms p50 vs liteparse 33ms）。带 7 个
+PNG predictor 单元测试防回归。详见 [LIMITATIONS.md §10](LIMITATIONS.md#10-已知-bug--待修)
+和 [CHANGELOG 0.7.3](../CHANGELOG.md#073---2026-06-28)。
+
 ---
 
 ## 横切关注点
@@ -507,14 +524,14 @@ flashpdf 遵循 SemVer，但**按库而非按应用**解释：
 | **OCR** | 需要训练模型 + GPU，与"轻量零依赖"目标相悖 | Tesseract / PaddleOCR（flashpdf 可输出图像字节供它们用） |
 | **PDF 编辑 / 生成** | flashpdf 是 read-only 提取器 | reportlab / fpdf2 / PyPDF |
 | **注释 / 表单填写** | 写操作需要完整 PDF 对象图，与提取目标正交 | PyMuPDF / pypdf |
-| **矢量图光栅化** | 需要 vector rasterizer，超出当前渲染封装的范畴 | PyMuPDF |
+| **矢量路径数据提取**（path 坐标 / 曲线参数）| text-extraction 核心不解析 path 算子；PDFium 渲染时会把矢量图完整光栅化进 PNG（`get_pixmap()` 输出包含全部矢量内容），但不暴露 path 坐标 | PyMuPDF（`page.get_drawings()`）|
 | **GPU 加速** | JPEG/DEFLATE 硬解 ROI 不明，依赖链爆炸 | CPU 已经够快（corpus 平均 2.98ms） |
 
 > **页面渲染** 之前列在 Non-goals，已在 `feature/render` 分支用 PDFium 解除——
 > `page.get_pixmap()` 通过 `pdfium-render` 调用 PDFium C ABI 输出 PNG，
 > 作为可选 Cargo feature + PDFium binary，不污染纯解析路径。
 > 详见 [docs/RENDERING.md](RENDERING.md) 和 [docs/BENCHMARK_RENDER.md](BENCHMARK_RENDER.md)。
-> 矢量图光栅化、OCR、编辑类仍然不做。
+> 矢量**图**光栅化已通过 PDFium 渲染解决；矢量**路径数据**提取（path 坐标）、OCR、编辑类仍然不做。
 
 **判断标准**：任何新功能要回答"这要不要 GPU/渲染器/写操作"。要的话不做。
 

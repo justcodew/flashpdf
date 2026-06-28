@@ -6,7 +6,7 @@
 
 ## TL;DR
 
-flashpdf 在 **文本提取** 和 **页面渲染** 两个场景都是**最快且零失败**——v0.7.2
+flashpdf 在 **文本提取** 和 **页面渲染** 两个场景都是**最快且零失败**——v0.7.3
 修好 11 个 page-tree bug 后渲染 165/165 全部成功，速度领先不变。
 
 | 场景 | 最快 | flashpdf 倍数 | 注 |
@@ -14,7 +14,7 @@ flashpdf 在 **文本提取** 和 **页面渲染** 两个场景都是**最快且
 | 文本提取（154 文件 apples-to-apples） | **flashpdf 3.06ms** | — | pdf_oxide 第二（11×），PyMuPDF 第三（31×）|
 | 文本提取大文件（>1MB, p50） | **flashpdf 5.66ms** | pdf_oxide 8×、PyMuPDF 24×、liteparse 475× | 大文件优势放大 |
 | 页面渲染（162 文件公共集，DPI 150） | **flashpdf 19.72ms** | liteparse 1.4×、pypdfium2 3.0×、PyMuPDF 4.3×、pdf_oxide 6.0× | 同 PDFium 内核但 PNG 编码更快 |
-| 页面渲染稳定性（165 文件） | **165/165 零失败** | — | 与 liteparse / pypdfium2 / PyMuPDF 持平（v0.7.2 修复后）|
+| 页面渲染稳定性（165 文件） | **165/165 零失败** | — | 与 liteparse / pypdfium2 / PyMuPDF 持平（v0.7.3 修复后）|
 | 极小文件（<10KB）批量 | flashpdf 0.98ms | pdf_oxide 20×、其他 ≥ 40× | 启动开销主导，差距小但 flashpdf 仍领先 |
 
 **最终结论**：在"快速解析大量 PDF"这一目标上 flashpdf 是综合最优解——速度第一、
@@ -34,7 +34,7 @@ liteparse 渲染第二快）——速度只是选型的一维，加密 / 编辑 
    强在自研 parser，弱在自研 rasterizer。
 4. **PDFium 内核 ≠ 同样快**：flashpdf 比 pypdfium2 快 3×——同样 PDFium，差距全在
    Python 绑定层 + PNG 编码层（Rust `image` crate vs PIL）。
-5. **flashpdf v0.7.2 修好后已与 PDFium/MuPDF 系稳定性持平**：v0.7.1 在 PyMuPDF
+5. **flashpdf v0.7.3 修好后已与 PDFium/MuPDF 系稳定性持平**：v0.7.1 在 PyMuPDF
    bug-regression 语料上 11 个 PDF 渲染失败，根因是 3 个独立的 xref 解析 bug
    （`/Prev` 链不跟随、xref stream 的 PNG predictor 不解码、recover_page_refs
    跳过 Compressed entries）。修复后 165/165 全部成功，速度领先不变。
@@ -122,9 +122,9 @@ PyMuPDF / pdf_oxide**。pdftext 内部用 pypdfium2（不单独测），其他 4
    但渲染倒数第二（112ms，长尾）。**选型时不能拿一个维度的 benchmark 套另一个维度**。
 4. **pdf_oxide 渲染有长尾**：p50 49ms 不慢，但 mean 112ms。8 个文件 >500ms，最慢
    test_3448.pdf **2.5s**。复杂矢量图/渐变/透明度合成场景需要优化（v0.3.x 早期）。
-5. **flashpdf 渲染 165/165（v0.7.2 修好的 page-tree bug）**：v0.7.1 有 11 个 PDF
+5. **flashpdf 渲染 165/165（v0.7.3 修好的 page-tree bug）**：v0.7.1 有 11 个 PDF
    渲染失败，根因是 3 个独立的 xref 解析 bug（`/Prev` 链不跟随、xref stream
-   PNG predictor 不解码、recover_page_refs 跳过 Compressed entries）。v0.7.2
+   PNG predictor 不解码、recover_page_refs 跳过 Compressed entries）。v0.7.3
    三个一起修，165/165 全部成功渲染，速度领先不变（25ms vs liteparse 33ms）。
 
 ### 2.0.1 文本排名 vs 渲染排名（文本 154 文件、渲染 162 文件）
@@ -209,13 +209,13 @@ Apple Silicon 上慢 1.5-2×。
 
 | 库 | 失败 | 文件 |
 |---|---:|---|
-| flashpdf | **0**（v0.7.2 已修）| — |
+| flashpdf | **0**（v0.7.3 已修）| — |
 | pdf_oxide | 3 | `test_3450.pdf`, `test_3806.pdf`, `test_4790.pdf`（具体原因未深挖，可能是 PDF 加密或损坏对象）|
 | liteparse | 0 | — |
 | pypdfium2 | 0 | — |
 | PyMuPDF | 0 | — |
 
-**v0.7.1 → v0.7.2 修复的 11 个 PDF**（曾经失败，现 165/165）：
+**v0.7.1 → v0.7.3 修复的 11 个 PDF**（曾经失败，现 165/165）：
 
 ```
 test-3820.pdf, test_2710.pdf, test_3058.pdf, test_3624.pdf, test_3848.pdf,
@@ -240,7 +240,7 @@ PNG predictor 单元测试防回归。
 | 库 | 失败文件数 | 类型 |
 |---|---:|---|
 | flashpdf (text) | 0 | — |
-| flashpdf (render) | **0**（v0.7.2 修好）| — |
+| flashpdf (render) | **0**（v0.7.3 修好）| — |
 | liteparse (text) | 2 + 1 skip | `circular-toc.pdf` 已知无限循环跳过；`test-3820.pdf` / `test_3594.pdf` |
 | liteparse (render) | 0 | — |
 | pdf_oxide (text) | 0 | — |
@@ -298,7 +298,7 @@ pypdf 在加密 + 损坏 xref 上比 Rust/C 实现的库脆弱。
    但渲染用自研 rasterizer 在矢量图/渐变场景有长尾。**与 liteparse 完全对称**——
    pdf_oxide 强在解析，liteparse 强在调用 PDFium。
 7. **渲染稳定性**：flashpdf / liteparse / pypdfium2 / PyMuPDF 全部 165/165 零失败；
-   pdf_oxide 162/165（3 个失败）。flashpdf v0.7.2 修了 v0.7.1 的 11 个 page-tree
+   pdf_oxide 162/165（3 个失败）。flashpdf v0.7.3 修了 v0.7.1 的 11 个 page-tree
    bug 后已与 PDFium/MuPDF 系稳定性持平。
 
 ## 5. 选型建议

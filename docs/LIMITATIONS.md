@@ -201,7 +201,7 @@ flashpdf 测试集中度高，但有些场景**没自动化测试覆盖**：
 - **xref 全表扫描恢复 O(N)**：10000+ 对象的 PDF 全表扫描可能 100ms+，
   但仅在主路径失败时触发
 
-### v0.7.2 修复：11 个 page-tree bug（render_only 失败）
+### v0.7.3 修复：11 个 page-tree bug（render_only 失败）
 
 v0.7.1 的渲染基准在 PyMuPDF 165-PDF 语料上有 11 个 PDF 渲染失败。
 根因是三个独立的 xref/page-tree 解析 bug：
