@@ -4,7 +4,7 @@ flashpdf is a **pure extraction library** by default — no rendering, no OCR,
 no editing. Rendering is offered as an opt-in Cargo feature for users who
 need `page.get_pixmap()` style page-to-image output alongside text extraction.
 
-The rendering backend is **[PDFium]** — Google's BSD-licensed C++ PDF engine
+The rendering backend is **[PDFium]** — Google's BSD-3-Clause C++ PDF engine
 (the same one Chrome uses to display PDFs). It is independent of flashpdf's
 own parser: when you call `get_pixmap()`, PDFium re-opens the file and
 rasterizes the page itself. The two engines share no internal state.
@@ -14,79 +14,44 @@ rasterizes the page itself. The two engines share no internal state.
 > **License note**: PDFium is BSD-3-Clause; `pdfium-render` (the Rust wrapper)
 > is MIT/Apache-2.0. Both are compatible with flashpdf's MIT license. You are
 > not required to change your project's license to use the `render` feature.
+> See [../NOTICE](../NOTICE) for the full third-party attribution.
 
-## Build with the feature
-
-The default `pip install flashpdf` does **not** include rendering. To enable
-it from source:
+## Install
 
 ```bash
-# Clone + build with the render feature
+pip install flashpdf
+```
+
+That's it — the wheel ships PDFium bundled under `flashpdf/_pdfium/`, so
+`page.get_pixmap()` works out of the box. No binary downloads, no env vars.
+
+If you build from source without the `render` Cargo feature, `get_pixmap()`
+will raise `NotImplementedError`:
+
+```bash
+# Source build with render feature enabled
 git clone https://github.com/justcodew/flashpdf.git
 cd flashpdf
 pip install maturin
 maturin develop --release --features render
 ```
 
-When the feature is **not** enabled, `page.get_pixmap()` still exists on the
-`Page` object (so IDE autocomplete works), but calling it raises
-`NotImplementedError` with a hint to rebuild with `--features render`.
+### Binary discovery (advanced)
 
-## Install the PDFium dynamic library
+For completeness, when `get_pixmap()` is called, flashpdf searches for the
+PDFium dynamic library in this order (first hit wins):
 
-PDFium is a C++ library with a stable C ABI. `pdfium-render` loads it via
-dynamic FFI at runtime — the binary is **not** bundled with the wheel. You
-must provide it yourself via one of:
+1. **Wheel-bundled** at `flashpdf/_pdfium/<lib>` — the default. Set
+   automatically by the Python binding layer.
+2. **`PDFIUM_PATH` env var** — explicit user override. Accepts either the
+   library file path or its parent directory.
+3. **`./pdfium-bin/<lib>`** — dev convenience, gitignored. Useful for
+   running local tests against multiple PDFium versions.
+4. **System library search path** — `LD_LIBRARY_PATH` / dyld / `PATH`.
+   Rarely needed; useful for distro packaging.
 
-### Option A: `PDFIUM_PATH` env var (recommended)
-
-```bash
-# 1. Download the prebuilt binary for your platform
-curl -L -o /tmp/pdfium.tgz \
-  https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-mac.tgz
-
-# 2. Extract
-mkdir -p /tmp/pdfium && tar xzf /tmp/pdfium.tgz -C /tmp/pdfium
-
-# 3. Point PDFIUM_PATH at the library file
-#    macOS:    /tmp/pdfium/Libraries/libpdfium.dylib
-#    Linux:    /tmp/pdfium/lib/libpdfium.so
-#    Windows:  C:\pdfium\bin\pdfium.dll
-export PDFIUM_PATH=/tmp/pdfium/Libraries/libpdfium.dylib
-
-python -c "import flashpdf; ..."   # now get_pixmap() works
-```
-
-Available prebuilt archives (`pdfium-binaries` latest release):
-
-| Platform | Archive | Library inside |
-|---|---|---|
-| macOS arm64 | `pdfium-mac.tgz` | `Libraries/libpdfium.dylib` |
-| macOS x64 | `pdfium-mac-x64.tgz` | `Libraries/libpdfium.dylib` |
-| Linux x64 | `pdfium-linux.tgz` | `lib/libpdfium.so` |
-| Linux arm64 | `pdfium-linux-arm64.tgz` | `lib/libpdfium.so` |
-| Windows x64 | `pdfium-win.tgz` | `bin\pdfium.dll` |
-| Windows arm64 | `pdfium-win-arm64.tgz` | `bin\pdfium.dll` |
-
-### Option B: `./pdfium-bin/` directory (dev convenience)
-
-Drop the file at a known path relative to your program's working directory:
-
-```
-your-project/
-├── pdfium-bin/
-│   └── libpdfium.dylib    # or libpdfium.so / pdfium.dll
-└── main.py
-```
-
-`pdfium-bin/` is gitignored by flashpdf — never commit the binary.
-
-### Option C: system library
-
-If `PDFIUM_PATH` is unset and `./pdfium-bin/` is empty, flashpdf falls back
-to whatever PDFium the system loader finds (`LD_LIBRARY_PATH` / dyld /
-`PATH`). This is rarely useful on dev machines but is the right knob for
-package managers that install PDFium system-wide.
+Most users never need to touch any of these. The wheel-bundled binary is
+the intended path.
 
 ## API
 
@@ -133,10 +98,10 @@ with flashpdf.open("paper.pdf") as doc:
 ```
 
 When `render_only=True`:
-- ✅ `len(doc)`, `doc[i]`, `page.get_pixmap()` work
-- ❌ `get_text()` / `get_images()` / `get_links()` return empty (stubs)
-- ❌ `page.rect` / `page.is_scanned` are stub values
-- ❌ `doc.metadata` / `doc.get_toc()` return empty
+- OK `len(doc)`, `doc[i]`, `page.get_pixmap()` work
+- Empty `get_text()` / `get_images()` / `get_links()` return empty (stubs)
+- Stub `page.rect` / `page.is_scanned` are stub values
+- Empty `doc.metadata` / `doc.get_toc()` return empty
 
 ### Not implemented (vs. PyMuPDF `Pixmap`)
 
@@ -162,31 +127,33 @@ If you need any of these, please open an issue.
   to rendering — that is by design (different engine, different job).
 - For batch rendering workloads, prefer calling `get_pixmap()` once per
   page rather than once per pixel-level tweak.
+- See [BENCHMARK_RENDER.md](BENCHMARK_RENDER.md) for measured comparisons
+  against PyMuPDF and pypdfium2 (flashpdf is ~3× faster than fitz at
+  corpus level thanks to a faster PNG encoder, despite using the same
+  PDFium rasterizer as pypdfium2).
 
-## CI / packaging (TODO)
+## Wheel size
 
-Multi-platform wheel distribution with PDFium binaries bundled is **not yet
-implemented**. The roadmap is:
+| Wheel variant | Approx. size | Contents |
+|---|---|---|
+| `flashpdf` (default, render bundled) | ~10 MB | Rust ext + PDFium binary |
+| Source build without `--features render` | ~3 MB | Rust ext only |
 
-1. GitHub Actions workflow that downloads `pdfium-binaries` for each target
-   triple during wheel build.
-2. Bundle the binary inside the wheel (platform-specific) — adds ~10MB per
-   platform.
-3. Expose a `pip install "flashpdf[render]"` extras that pulls the
-   precompiled wheel.
-
-Until that lands, `render` users must build from source + provide PDFium
-themselves as documented above.
+The 7 MB PDFium binary is the dominant size cost. This matches pypdfium2's
+distribution model (single wheel, PDFium bundled). We chose this over
+"download on first run" for offline/enterprise use cases and simplicity.
 
 ## Troubleshooting
 
 **`NotImplementedError: page.get_pixmap() requires the 'render' Cargo feature`**
-→ You installed the default wheel. Rebuild with
-   `maturin develop --release --features render`.
+→ You built from source without the feature. Rebuild with
+   `maturin develop --release --features render`. (PyPI wheels always have
+   the feature on.)
 
 **`RuntimeError: PDFium dynamic library not found. ...`**
-→ PDFium binary isn't reachable. Set `PDFIUM_PATH`, drop it under
-   `./pdfium-bin/`, or (Linux) install it system-wide.
+→ Should not happen with `pip install flashpdf`. If you're using a custom
+   wheel or source build, set `PDFIUM_PATH=<path>` or place the binary under
+   `./pdfium-bin/`.
 
 **`RuntimeError: pdfium load failed for ...: ...`**
 → PDFium couldn't open the PDF. Common causes: file is corrupted, file is

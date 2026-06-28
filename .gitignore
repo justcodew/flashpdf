@@ -32,9 +32,11 @@ comparison_results.json
 __pycache__/
 *.pyc
 
-# PDFium dynamic library (render feature). Downloaded per-developer,
-# never checked in. See docs/RENDERING.md.
+# PDFium dynamic library (render feature). Downloaded per-developer or
+# placed by CI into the wheel bundle path. Never checked in.
+# See docs/RENDERING.md.
 pdfium-bin/
+python/flashpdf/_pdfium/
 
 # benchmark scratch output (kept in tree, ignored by git)
 tests/out/*.jsonl

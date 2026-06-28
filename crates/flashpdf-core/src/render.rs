@@ -2,20 +2,41 @@
 //!
 //! PDFium is Google's BSD-licensed C++ PDF library (used in Chrome). We link
 //! against it via the `pdfium-render` Rust crate, which performs dynamic FFI
-//! to the PDFium C ABI at runtime. This means the PDFium dynamic library
-//! (`.so` / `.dylib` / `.dll`) is **not** bundled with the crate — it must
-//! be provided at runtime via:
+//! to the PDFium C ABI at runtime.
 //!
-//! 1. `PDFIUM_PATH` environment variable pointing at the library file, OR
-//! 2. `./pdfium-bin/libpdfium.{so,dylib,dll}` (dev convenience, gitignored), OR
-//! 3. system library search path.
+//! ## Binary discovery (search order, first hit wins)
 //!
-//! See `docs/RENDERING.md` for download instructions.
+//! 1. **Wheel-bundled**: `flashpdf/_pdfium/<lib>` next to the Python package.
+//!    Set by `set_bundled_pdfium_dir()` from the Python binding layer on
+//!    first render call. This is the default path for `pip install flashpdf`
+//!    once the render wheel is distributed.
+//! 2. **`PDFIUM_PATH` env**: explicit override (file or directory).
+//! 3. **`./pdfium-bin/<lib>`**: dev convenience, gitignored.
+//! 4. **System library**: dynamic loader search path.
+//!
+//! See `docs/RENDERING.md` for distribution model and local dev setup.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use pdfium_render::prelude::*;
+
+/// Optional wheel-bundled PDFium directory. Set once by the Python binding
+/// layer (flashpdf-py) on first render, derived from
+/// `importlib.resources.files("flashpdf") / "_pdfium"`.
+static BUNDLED_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Register the directory containing the wheel-bundled PDFium binary.
+///
+/// Called by `flashpdf-py::page::get_pixmap` before the first render. The
+/// dir typically resolves to `<site-packages>/flashpdf/_pdfium/`. If the
+/// dir doesn't exist or the binary isn't there, the search falls through
+/// to the remaining strategies (env / dev / system).
+///
+/// Idempotent: subsequent calls are no-ops (OnceLock keeps the first value).
+pub fn set_bundled_pdfium_dir(dir: PathBuf) {
+    let _ = BUNDLED_DIR.set(dir);
+}
 
 /// Process-wide PDFium instance. PDFium's C library can only be initialized
 /// once per process (`FPDF_InitLibrary` is idempotent-but-exclusive). We
@@ -102,13 +123,15 @@ pub fn render_page_to_png(path: &str, page_idx: usize, dpi: u32) -> Result<Vec<u
 /// Locate and bind to the PDFium dynamic library.
 ///
 /// Search order (first hit wins):
-/// 1. `PDFIUM_PATH` env (exact file path)
-/// 2. `./pdfium-bin/<platform_lib>` (dev convenience)
-/// 3. system library search path
+/// 1. `PDFIUM_PATH` env (user override, exact file or dir)
+/// 2. Wheel-bundled: dir registered via `set_bundled_pdfium_dir()`
+/// 3. `./pdfium-bin/<platform_lib>` (dev convenience)
+/// 4. system library search path
 fn load_pdfium() -> Result<Pdfium, String> {
     // 1. PDFIUM_PATH env. Accept either the library file itself or the
     //    directory containing it — `pdfium_platform_library_name_at_path`
     //    expects a directory, so normalize file inputs to their parent.
+    //    User-set env always wins, overriding the wheel-bundled binary.
     if let Ok(p) = std::env::var("PDFIUM_PATH") {
         let raw = PathBuf::from(&p);
         let dir = if raw.is_file() {
@@ -124,7 +147,19 @@ fn load_pdfium() -> Result<Pdfium, String> {
         };
     }
 
-    // 2. ./pdfium-bin/ dev convenience
+    // 2. Wheel-bundled binary. The Python layer registers the dir before
+    //    the first render call. Bind fails silently if the binary is missing
+    //    or wrong arch (e.g. user copied wheel across platforms), and we
+    //    fall through to remaining strategies.
+    if let Some(dir) = BUNDLED_DIR.get() {
+        if let Ok(bindings) =
+            Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(dir))
+        {
+            return Ok(Pdfium::new(bindings));
+        }
+    }
+
+    // 3. ./pdfium-bin/ dev convenience
     for candidate in dev_candidates() {
         if let Ok(bindings) =
             Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&candidate))
@@ -133,14 +168,16 @@ fn load_pdfium() -> Result<Pdfium, String> {
         }
     }
 
-    // 3. system library
+    // 4. system library
     Pdfium::bind_to_system_library()
         .map(Pdfium::new)
         .map_err(|e| {
             format!(
-                "PDFium dynamic library not found. Set PDFIUM_PATH=<path> or place \
-                 libpdfium.{{so,dylib,dll}} under ./pdfium-bin/. \
-                 Download from https://github.com/bblanchon/pdfium-binaries/releases — {e}"
+                "PDFium dynamic library not found. The render-enabled wheel should \
+                 bundle it under flashpdf/_pdfium/. If it's missing, set \
+                 PDFIUM_PATH=<path> or place libpdfium.{{so,dylib,dll}} under \
+                 ./pdfium-bin/. Download from \
+                 https://github.com/bblanchon/pdfium-binaries/releases — {e}"
             )
         })
 }
@@ -171,7 +208,9 @@ mod tests {
     use super::*;
 
     fn pdfium_available() -> bool {
-        std::env::var("PDFIUM_PATH").is_ok() || std::path::Path::new("pdfium-bin").exists()
+        std::env::var("PDFIUM_PATH").is_ok()
+            || std::path::Path::new("pdfium-bin").exists()
+            || BUNDLED_DIR.get().map_or(false, |d| d.exists())
     }
 
     #[test]

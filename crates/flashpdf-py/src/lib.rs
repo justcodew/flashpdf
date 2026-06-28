@@ -636,6 +636,49 @@ fn opt_to_py<'py>(py: Python<'py>, s: &Option<String>) -> Bound<'py, PyAny> {
     }
 }
 
+/// Tell `flashpdf-core::render` where to find the wheel-bundled PDFium
+/// binary (under `<flashpdf install dir>/_pdfium/`). Idempotent — the core
+/// side uses a `OnceLock`, so calling this on every `get_pixmap()` is cheap.
+///
+/// Skipped silently when the dir doesn't exist (text-only wheel, source dev
+/// build without local PDFium). In that case the core falls through to
+/// `PDFIUM_PATH` / `./pdfium-bin/` / system library.
+#[cfg(feature = "render")]
+fn register_bundled_pdfium(py: Python<'_>) {
+    use std::path::PathBuf;
+
+    // Resolve `flashpdf.__file__` (regular package) or first entry of
+    // `flashpdf.__path__` (namespace package), then point at the sibling
+    // `_pdfium/` directory. Falls through silently on any error.
+    //
+    // PyO3's `import_bound` is cleaner than eval() here because eval() in
+    // Python only accepts expressions, not statements like `import`.
+    let location: Option<String> = (|| {
+        let pkg = py.import("flashpdf").ok()?;
+        // Try `__file__` first (regular package).
+        if let Ok(file_obj) = pkg.getattr("__file__") {
+            if let Ok(s) = file_obj.extract::<String>() {
+                return Some(s);
+            }
+        }
+        // Fall back to first `__path__` entry (namespace package).
+        let path_obj = pkg.getattr("__path__").ok()?;
+        let path_seq = path_obj.downcast_into::<pyo3::types::PySequence>().ok()?;
+        let first = path_seq.get_item(0).ok()?;
+        first.extract::<String>().ok()
+    })();
+
+    let Some(file_path) = location else { return };
+    let path_buf = PathBuf::from(file_path);
+    let Some(parent) = path_buf.parent() else {
+        return;
+    };
+    let pdfium_dir = parent.join("_pdfium");
+    if pdfium_dir.is_dir() {
+        flashpdf_core::render::set_bundled_pdfium_dir(pdfium_dir);
+    }
+}
+
 /// A single PDF page view. Returned by `doc[i]`.
 ///
 /// `get_text("dict")` returns a fitz-compatible dict with text blocks
@@ -724,6 +767,11 @@ impl PyPage {
         }
         #[cfg(feature = "render")]
         {
+            // Register the wheel-bundled PDFium dir on first render. No-op
+            // if PDFIUM_PATH is set or the dir doesn't exist (e.g. text-only
+            // wheel, source dev build without local PDFium).
+            register_bundled_pdfium(py);
+
             let png = flashpdf_core::render::render_page_to_png(
                 &self.path.to_string_lossy(),
                 self.page_idx,

@@ -182,18 +182,15 @@ with flashpdf.open(path) as doc:
 ## 复现
 
 ```bash
-# 1. 下载 PDFium binary（macOS arm64 示例）
-curl -L -o /tmp/pdfium.tgz \
-  https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7906/pdfium-mac-arm64.tgz
-mkdir -p /tmp/pdfium && tar xzf /tmp/pdfium.tgz -C /tmp/pdfium
-export PDFIUM_PATH=/tmp/pdfium/lib/libpdfium.dylib
+# 1. 装 flashpdf（PyPI wheel 自带 PDFium binary，无需额外下载）
+pip install flashpdf pillow pypdfium2 pymupdf
 
-# 2. 构建 flashpdf（带 render feature）
-git clone https://github.com/justcodew/flashpdf.git
-cd flashpdf && pip install maturin pillow pypdfium2 pymupdf
-maturin develop --release --features render
+# 可选：源码构建（要跑最新未发布版本时）
+# git clone https://github.com/justcodew/flashpdf.git
+# cd flashpdf && pip install maturin
+# maturin develop --release --features render
 
-# 3. 跑对比（需要 PyMuPDF 测试集）
+# 2. 跑对比（需要 PyMuPDF 测试集）
 git clone --depth 1 https://github.com/pymupdf/PyMuPDF.git /tmp/pymupdf
 python tests/bench_render.py            # 第一轮：默认路径
 python tests/bench_render_fair.py       # 第二轮：公平对比

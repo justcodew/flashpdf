@@ -140,13 +140,15 @@ flashpdf 的图像提取**只针对嵌入位图**——`Do` 引用的 Image XObj
 - ❌ 输出恒为 RGBA + 白底（不保留透明度）
 
 ### 部署层
-- ❌ **PDFium binary 不打包**：默认 `pip install flashpdf` 没有渲染能力。需要：
-  1. 从源码 `maturin develop --release --features render`
-  2. 单独下 PDFium binary（`PDFIUM_PATH` 或 `./pdfium-bin/`）
-  
-  对比 fitz：装完就能渲染——开箱即用体验上 fitz 占优
-- ❌ 没有 `pip install "flashpdf[render]"` extras（roadmap）
-- ❌ 没有 multi-platform wheel CI（roadmap）
+- ✅ **PDFium binary 打包进 wheel**（v0.7.x 之后）：`pip install flashpdf`
+  装的 wheel 自带 PDFium binary 在 `flashpdf/_pdfium/` 下，开箱即用，与
+  fitz / pypdfium2 部署体验持平
+- ⚠️ **wheel 体积**：~10MB（PDFium binary 占 7MB）。vs 纯文本 wheel ~3MB。
+  匹配 pypdfium2 的分发模型
+- ⚠️ **平台覆盖**：当前 CI 矩阵覆盖 linux x86_64/aarch64、macos x86_64/aarch64、
+  win x64。其他平台（linux armv7、windows arm64、BSD 等）需源码构建
+- ⚠️ **自定义 PDFium 版本**：用户无法选择 PDFium 版本——wheel 绑定一个
+  固定版本。要换版本，用 `PDFIUM_PATH` env 覆盖（指向自定义 binary）
 
 ### 性能层
 - ⚠️ **极端吞吐场景未测**：每秒 1000+ 页缩略图这类场景，pypdfium2 的

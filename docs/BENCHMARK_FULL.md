@@ -268,7 +268,7 @@ pypdf 在加密 + 损坏 xref 上比 Rust/C 实现的库脆弱。
 
 | 库 | 速度 | 功能广度 | fitz 兼容 | 部署 | 特长 |
 |---|---|---|---|---|---|
-| **flashpdf** | **★★★★★** | ★★★ | ✅ 主流 | 需 Rust 工具链源码构建；render 需 PDFium binary | 最快文本 + 最快渲染 + 165/165 零失败 |
+| **flashpdf** | **★★★★★** | ★★★ | ✅ 主流 | pip install（wheel 自带 PDFium binary）| 最快文本 + 最快渲染 + 165/165 零失败 |
 | pdf_oxide | ★★★★ | ★★★★★ | ❌ | pip install | 唯一同时支持编辑（合并/拆分/签名）的快速库 |
 | PyMuPDF | ★★★ | ★★★★★ | — (就是 fitz) | pip install 开箱即用 | 全功能：编辑、注释、签名、OCR、AES-256 |
 | pypdfium2 | ★★★ | ★★★ | ❌ | pip install 自带 PDFium | 渲染最稳定、纯 Python wheel |
@@ -327,12 +327,7 @@ pypdf 在加密 + 损坏 xref 上比 Rust/C 实现的库脆弱。
 pip install flashpdf liteparse pdf-oxide pymupdf pypdfium2 pypdf pdftext \
             pdfminer.six markitdown pdfplumber
 
-# 2. 准备 PDFium binary（flashpdf 渲染需要）
-curl -L https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-mac.tgz | tar xz
-mkdir -p pdfium-bin && cp Libraries/libpdfium.dylib pdfium-bin/
-export PDFIUM_PATH=$(pwd)/pdfium-bin/libpdfium.dylib
-
-# 3. 准备语料
+# 2. 准备语料（flashpdf 的 wheel 已自带 PDFium，无需额外下载）
 git clone --depth 1 https://github.com/pymupdf/PyMuPDF.git /tmp/pymupdf
 export CORPUS_DIR=/tmp/pymupdf/tests/resources
 
