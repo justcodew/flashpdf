@@ -25,6 +25,12 @@ pub struct FontInfo {
     pub first_char: u32,
     pub default_width: f64,
     pub cmap: Option<CMap>,
+    /// Reverse cmap from embedded TrueType font program (GID → Unicode).
+    /// Populated only for non-CID fonts that lack a /ToUnicode CMap.
+    /// Aspose.Words emits PDFs where a TrueType+WinAnsiEncoding font is fed
+    /// 2-byte codes that are actually glyph IDs into the embedded subset.
+    /// Without this reverse map those bytes decode as Latin-1 garbage.
+    pub ttf_reverse_cmap: Option<HashMap<u32, char>>,
     pub differences: Option<HashMap<u8, Vec<u8>>>,
     /// CIDFont descendant (for Type0 composite fonts)
     pub cid_font: Option<CIDFontInfo>,
@@ -191,13 +197,27 @@ impl FontInfo {
                 }
             }
         }
-        // 3. Try built-in standard font encodings
+        // 3. Reverse cmap from embedded TrueType font program. Aspose.Words
+        // emits glyph IDs as 2-byte codes for fonts marked TrueType +
+        // WinAnsiEncoding without /ToUnicode. The only Unicode source is
+        // the font's own cmap reversed to GID→Unicode. Restrict to 2-byte
+        // codes — the same font may also receive legitimate 1-byte ASCII
+        // (e.g. page numbers), which must go through the standard path.
+        if code.len() == 2 {
+            if let Some(rc) = &self.ttf_reverse_cmap {
+                let gid = ((code[0] as u32) << 8) | code[1] as u32;
+                if let Some(c) = rc.get(&gid) {
+                    return *c;
+                }
+            }
+        }
+        // 4. Try built-in standard font encodings
         if code.len() == 1 {
             if let Some(c) = builtin_font_decode(&self.base_font, code[0]) {
                 return c;
             }
         }
-        // 4. Raw byte
+        // 5. Raw byte
         if code.len() == 1 {
             let b = code[0];
             if (0x20..0x7F).contains(&b) {
@@ -537,6 +557,7 @@ pub fn extract_font_info(font_obj: &PdfObject<'_>) -> FontInfo {
         first_char,
         default_width,
         cmap: None, // Populated later from ToUnicode stream
+        ttf_reverse_cmap: None, // Populated later from FontFile2 cmap
         differences,
         cid_font: None, // Populated for Type0 fonts
         flags,
@@ -771,6 +792,238 @@ fn extract_encoding_from_font_program<'a>(
     parse_type1_encoding(&text)
 }
 
+/// Build a reverse cmap (GID → Unicode) from an embedded TrueType font program.
+///
+/// Some PDFs (notably produced by Aspose.Words) declare a font as
+/// `/Subtype /TrueType` with `/Encoding /WinAnsiEncoding` and no
+/// `/ToUnicode`, but then emit 2-byte glyph IDs through TJ operators. The
+/// codes are glyph IDs into the embedded subset font, so the only way to
+/// recover Unicode is to parse the font's `cmap` table and reverse the
+/// Unicode→GID mapping.
+///
+/// Returns `None` when the font program cannot be located or has no usable
+/// cmap subtable.
+fn build_ttf_reverse_cmap<'a>(
+    font_obj: &PdfObject<'a>,
+    get_object: &impl Fn(u32) -> ParseResult<PdfObject<'a>>,
+) -> Option<HashMap<u32, char>> {
+    // Resolve FontDescriptor → FontFile2 (TrueType). FontFile (Type 1) and
+    // FontFile3 (CIDFont/OpenType CFF) are out of scope here — Type 1 already
+    // has its own encoding extractor, and CIDFont goes through cid_font path.
+    let fd_ref = match font_obj.get(b"FontDescriptor")? {
+        PdfObject::Ref(r) => r,
+        _ => return None,
+    };
+    let fd = get_object(fd_ref.num).ok()?;
+    let ff_ref = match fd.get(b"FontFile2")? {
+        PdfObject::Ref(r) => r,
+        _ => return None,
+    };
+    let ff_obj = get_object(ff_ref.num).ok()?;
+    let (data, dict) = match &ff_obj {
+        PdfObject::Stream { data, dict } => (data, dict),
+        _ => return None,
+    };
+    let filter = dict.iter().find(|(k, _)| *k == b"Filter").map(|(_, v)| v);
+    let raw = match filter {
+        Some(f) => crate::parser::xref::decompress_stream(data, f).unwrap_or_else(|_| data.to_vec()),
+        None => data.to_vec(),
+    };
+
+    parse_ttf_cmap_reverse(&raw)
+}
+
+/// Parse a TrueType sfnt and return GID → Unicode for every glyph reachable
+/// via a Unicode cmap subtable. Supports formats 0, 4, 6, 12, 13. When
+/// multiple Unicode subtables exist, later ones override earlier ones
+/// (matches what most font engines do — the higher-version subtable wins).
+fn parse_ttf_cmap_reverse(raw: &[u8]) -> Option<HashMap<u32, char>> {
+    if raw.len() < 12 {
+        return None;
+    }
+    // sfnt header: u32 version, u16 numTables, u16 searchRange, u16 entrySelector, u16 rangeShift
+    let num_tables = u16::from_be_bytes([raw[4], raw[5]]) as usize;
+    let dir_off = 12;
+    if raw.len() < dir_off + num_tables * 16 {
+        return None;
+    }
+    let mut cmap_off = None;
+    let mut cmap_len = 0usize;
+    for i in 0..num_tables {
+        let o = dir_off + i * 16;
+        let tag = &raw[o..o + 4];
+        if tag == b"cmap" {
+            cmap_off = Some(u32::from_be_bytes([raw[o + 8], raw[o + 9], raw[o + 10], raw[o + 11]]) as usize);
+            cmap_len = u32::from_be_bytes([raw[o + 12], raw[o + 13], raw[o + 14], raw[o + 15]]) as usize;
+            break;
+        }
+    }
+    let cmap_off = cmap_off?;
+    if cmap_off + 4 > raw.len() {
+        return None;
+    }
+    let n_subtables = u16::from_be_bytes([raw[cmap_off + 2], raw[cmap_off + 3]]) as usize;
+    let subtable_dir = cmap_off + 4;
+    if raw.len() < subtable_dir + n_subtables * 8 {
+        return None;
+    }
+
+    let mut map: HashMap<u32, char> = HashMap::new();
+    for i in 0..n_subtables {
+        let o = subtable_dir + i * 8;
+        let platform_id = u16::from_be_bytes([raw[o], raw[o + 1]]);
+        let encoding_id = u16::from_be_bytes([raw[o + 2], raw[o + 3]]);
+        let sub_off = u32::from_be_bytes([raw[o + 4], raw[o + 5], raw[o + 6], raw[o + 7]]) as usize;
+        let sub_abs = cmap_off + sub_off;
+        if sub_abs + 2 > raw.len() || sub_abs + cmap_len.min(raw.len()) > raw.len() {
+            continue;
+        }
+        // Only Unicode-mapped subtables give us GID→Unicode. Microsoft
+        // platform (3) encoding 1 (Unicode BMP) and 10 (Unicode full), and
+        // platform 0 (Unicode) any encoding. Skip MacRoman (1/0).
+        let is_unicode = (platform_id == 3 && (encoding_id == 1 || encoding_id == 10))
+            || platform_id == 0;
+        if !is_unicode {
+            continue;
+        }
+        let format = u16::from_be_bytes([raw[sub_abs], raw[sub_abs + 1]]);
+        parse_cmap_subtable(raw, sub_abs, format, &mut map);
+    }
+
+    if map.is_empty() { None } else { Some(map) }
+}
+
+/// Parse a single cmap subtable into the reverse map. Formats 0/6 use u16
+/// length header; formats 8/10/12/13 use u32 length header. Format 4 is
+/// the dominant case for BMP fonts and the only one Aspose.Words emits in
+/// practice.
+fn parse_cmap_subtable(raw: &[u8], off: usize, format: u16, map: &mut HashMap<u32, char>) {
+    match format {
+        0 => {
+            // 256-byte glyph ID array, codepoint = index.
+            let body = off + 6;
+            if body + 256 > raw.len() {
+                return;
+            }
+            for c in 0u32..256 {
+                let gid = raw[body + c as usize] as u32;
+                if gid != 0 && !map.contains_key(&gid) {
+                    if let Some(ch) = char::from_u32(c) {
+                        map.insert(gid, ch);
+                    }
+                }
+            }
+        }
+        4 => {
+            // Segment mapping to delta values. See OpenType spec §3.1.4.
+            // Layout (all u16 BE): format, length, language, segCountX2,
+            // searchRange, entrySelector, rangeShift, endCode[segCount],
+            // reservedPad, startCode[segCount], idDelta[segCount],
+            // idRangeOffset[segCount], glyphIdArray[].
+            if off + 14 > raw.len() {
+                return;
+            }
+            let seg_count_x2 = u16::from_be_bytes([raw[off + 6], raw[off + 7]]) as usize;
+            let seg_count = seg_count_x2 / 2;
+            let end_codes_off = off + 14;
+            let start_codes_off = end_codes_off + seg_count_x2 + 2; // +2 for reservedPad
+            let id_delta_off = start_codes_off + seg_count_x2;
+            let id_range_offset_off = id_delta_off + seg_count_x2;
+            if raw.len() < id_range_offset_off + seg_count_x2 {
+                return;
+            }
+            for i in 0..seg_count {
+                let end_c = u16::from_be_bytes([raw[end_codes_off + i * 2], raw[end_codes_off + i * 2 + 1]]) as u32;
+                let start_c = u16::from_be_bytes([raw[start_codes_off + i * 2], raw[start_codes_off + i * 2 + 1]]) as u32;
+                let delta = i16::from_be_bytes([raw[id_delta_off + i * 2], raw[id_delta_off + i * 2 + 1]]) as i32;
+                let ro = u16::from_be_bytes([raw[id_range_offset_off + i * 2], raw[id_range_offset_off + i * 2 + 1]]) as usize;
+                // Skip the sentinel segment 0xFFFF–0xFFFF.
+                if start_c == 0xFFFF && end_c == 0xFFFF {
+                    continue;
+                }
+                for c in start_c..=end_c {
+                    let gid = if ro == 0 {
+                        ((c as i32 + delta) & 0xFFFF) as u32
+                    } else {
+                        // glyphIndexAddress = idRangeOffset[i] + 2 * (c - startCode[i])
+                        //                    + (address of idRangeOffset[i])
+                        let gi_addr = id_range_offset_off + i * 2 + ro + (c - start_c) as usize * 2;
+                        if gi_addr + 2 > raw.len() {
+                            continue;
+                        }
+                        let g = u16::from_be_bytes([raw[gi_addr], raw[gi_addr + 1]]) as u32;
+                        if g == 0 {
+                            0
+                        } else {
+                            ((g as i32 + delta) & 0xFFFF) as u32
+                        }
+                    };
+                    if gid != 0 && !map.contains_key(&gid) {
+                        if let Some(ch) = char::from_u32(c) {
+                            map.insert(gid, ch);
+                        }
+                    }
+                }
+            }
+        }
+        6 => {
+            // Trimmed table: u16 firstCode, u16 entryCount, glyphIdArray[].
+            if off + 10 > raw.len() {
+                return;
+            }
+            let first = u16::from_be_bytes([raw[off + 6], raw[off + 7]]) as u32;
+            let count = u16::from_be_bytes([raw[off + 8], raw[off + 9]]) as usize;
+            let body = off + 10;
+            if body + count * 2 > raw.len() {
+                return;
+            }
+            for k in 0..count {
+                let gid = u16::from_be_bytes([raw[body + k * 2], raw[body + k * 2 + 1]]) as u32;
+                if gid != 0 && !map.contains_key(&gid) {
+                    if let Some(ch) = char::from_u32(first + k as u32) {
+                        map.insert(gid, ch);
+                    }
+                }
+            }
+        }
+        12 | 13 => {
+            // Segmented coverage / many-to-one: u16 format, u16 reserved,
+            // u32 length, u32 language, u32 numGroups, then numGroups records
+            // of (u32 startCharCode, u32 endCharCode, i32 startGlyphID).
+            // Format 12: gid = startGlyphID + (c - startCharCode).
+            // Format 13: gid = startGlyphID (constant).
+            if off + 16 > raw.len() {
+                return;
+            }
+            let num_groups = u32::from_be_bytes([raw[off + 12], raw[off + 13], raw[off + 14], raw[off + 15]]) as usize;
+            let body = off + 16;
+            if body + num_groups * 12 > raw.len() {
+                return;
+            }
+            for g in 0..num_groups {
+                let o = body + g * 12;
+                let start_c = u32::from_be_bytes([raw[o], raw[o + 1], raw[o + 2], raw[o + 3]]);
+                let end_c = u32::from_be_bytes([raw[o + 4], raw[o + 5], raw[o + 6], raw[o + 7]]);
+                let start_gid = i32::from_be_bytes([raw[o + 8], raw[o + 9], raw[o + 10], raw[o + 11]]);
+                for c in start_c..=end_c {
+                    let gid = if format == 12 {
+                        (start_gid + (c - start_c) as i32) as u32
+                    } else {
+                        start_gid as u32
+                    };
+                    if gid != 0 && !map.contains_key(&gid) {
+                        if let Some(ch) = char::from_u32(c) {
+                            map.insert(gid, ch);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {} // formats 2, 8, 10, 14 — rare or never seen with Aspose output
+    }
+}
+
+
 /// Strip PFB binary section headers, concatenating the ASCII payload.
 fn strip_pfb_header(raw: &[u8]) -> String {
     let mut out = Vec::new();
@@ -922,6 +1175,15 @@ pub fn build_font_map<'a>(
                     }
                 }
             }
+        }
+
+        // For non-CID fonts lacking a ToUnicode CMap, fall back to the
+        // embedded TrueType font program's cmap table. Aspose.Words emits
+        // PDFs where a TrueType+WinAnsi font is fed 2-byte glyph IDs; the
+        // only source of Unicode is the font's own Unicode→GID subtable
+        // reversed to GID→Unicode.
+        if !info.is_type0 && info.cmap.is_none() && info.ttf_reverse_cmap.is_none() {
+            info.ttf_reverse_cmap = build_ttf_reverse_cmap(&font_obj, &get_object);
         }
 
         // For Type0 fonts, resolve CIDFont descendant
@@ -1827,7 +2089,7 @@ mod tests {
             widths: vec![],
             first_char: 0,
             default_width: 600.0,
-            cmap: None,
+            cmap: None, ttf_reverse_cmap: None,
             differences: None,
             cid_font: None,
             flags: 0,
@@ -1847,7 +2109,7 @@ mod tests {
             widths: vec![],
             first_char: 0,
             default_width: 600.0,
-            cmap: None,
+            cmap: None, ttf_reverse_cmap: None,
             differences: None,
             cid_font: None,
             flags: 0,
@@ -1875,7 +2137,7 @@ mod tests {
             widths: vec![],
             first_char: 0,
             default_width: 600.0,
-            cmap: None,
+            cmap: None, ttf_reverse_cmap: None,
             differences: None,
             cid_font: None,
             flags: 0,
@@ -1902,7 +2164,7 @@ mod tests {
             widths: vec![],
             first_char: 0,
             default_width: 600.0,
-            cmap: None,
+            cmap: None, ttf_reverse_cmap: None,
             differences: None,
             cid_font: None,
             flags: 0,
@@ -1929,6 +2191,7 @@ mod tests {
                 bfchar,
                 bfrange: vec![],
             }),
+            ttf_reverse_cmap: None,
             differences: None,
             cid_font: None,
             flags: 0,

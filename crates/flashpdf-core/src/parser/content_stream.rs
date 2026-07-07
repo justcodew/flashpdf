@@ -1006,8 +1006,19 @@ fn emit_string(
     let font_info = fonts.get(&font_name);
     let char_width_default = font_size * 0.6 * h_scale;
 
-    // For Type0 (CID) fonts, bytes may be 2-byte codes
-    let is_cid = font_info.is_some_and(|f| f.is_type0);
+    // For Type0 (CID) fonts, bytes are 2-byte codes. Aspose.Words also
+    // feeds 2-byte glyph IDs to non-CID TrueType fonts whose only Unicode
+    // source is the embedded cmap. But Aspose reuses those same fonts for
+    // genuine ASCII (page numbers, dates like "2024"), so we must inspect
+    // the payload: pure-printable-byte strings are ASCII, anything else
+    // is 2-byte CID data decoded via the reverse cmap.
+    let is_cid = if font_info.is_some_and(|f| f.is_type0) {
+        true
+    } else if font_info.is_some_and(|f| f.ttf_reverse_cmap.is_some()) {
+        !bytes.iter().all(|&b| (0x20..0x7F).contains(&b))
+    } else {
+        false
+    };
     let mut i = 0;
 
     while i < bytes.len() {
