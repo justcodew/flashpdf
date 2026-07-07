@@ -1222,7 +1222,9 @@ fn extract_cid_font_info(cid_obj: &PdfObject<'_>) -> CIDFontInfo {
         .and_then(|v| v.as_f64())
         .unwrap_or(1000.0);
 
-    // Parse /W array into ranges: format is c_first c_last w1 w2 ... wn OR c [w1 w2 ... wn]
+    // Parse /W array into ranges. PDF spec §9.7.4.3 Table 123 — elements are
+    // either `c [w1 w2 ... wn]` (variable) or `c_first c_last w` (single
+    // width w applied to all CIDs in the range).
     let width_ranges = parse_cid_widths(cid_obj);
 
     // Parse /CIDToGIDMap (for CIDFontType2)
@@ -1285,30 +1287,35 @@ fn parse_cid_widths(cid_obj: &PdfObject<'_>) -> Vec<CIDWidthRange> {
             break;
         }
 
-        // Check if next is an array (c [w1 w2 ... wn]) or integer (c_first c_last w...)
+        // PDF spec §9.7.4.3 Table 123 — /W array elements are either:
+        //   (a) `c [w1 w2 ... wn]` — variable widths for n consecutive CIDs from c
+        //   (b) `c_first c_last w` — ONE width w applied to every CID in [c_first, c_last]
         match &w_array[i + 1] {
             PdfObject::Array(arr) => {
-                // Individual widths: c [w1 w2 ... wn]
+                // Variable widths: c [w1 w2 ... wn]
                 let widths: Vec<f64> = arr.iter().map(|w| w.as_f64().unwrap_or(0.0)).collect();
                 if !widths.is_empty() {
                     ranges.push(CIDWidthRange { c_first, widths });
                 }
                 i += 2;
             }
-            PdfObject::Integer(c_last) => {
-                // Range: c_first c_last w1 w2 ... wn
-                let c_last = *c_last as u32;
-                let count = (c_last - c_first + 1) as usize;
-                let mut widths = Vec::with_capacity(count);
-                for j in 0..count {
-                    if i + 2 + j < w_array.len() {
-                        widths.push(w_array[i + 2 + j].as_f64().unwrap_or(0.0));
-                    } else {
-                        widths.push(0.0);
-                    }
-                }
+            PdfObject::Integer(c_last_raw) => {
+                // Range with single width: c_first c_last w
+                let c_last = *c_last_raw as u32;
+                // Guard against malformed/decreasing ranges — clamp to 0 to
+                // avoid underflow in (c_last - c_first + 1).
+                let count = if c_last >= c_first {
+                    (c_last - c_first + 1) as usize
+                } else {
+                    1
+                };
+                let w = w_array
+                    .get(i + 2)
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let widths = vec![w; count];
                 ranges.push(CIDWidthRange { c_first, widths });
-                i += 2 + count;
+                i += 3;
             }
             _ => {
                 i += 1;
