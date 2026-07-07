@@ -1035,22 +1035,14 @@ fn emit_string(
 
         i += code_bytes.len();
 
-        // Calculate character position. For rotated/sheared text the full
-        // TRM = CTM × Tm is non-axis-aligned (b != 0 or c != 0); we compute
-        // the device-space bbox via 4-corner transform in that case.
-        // Otherwise the cheaper text-space offset path is used (preserves
-        // historical behavior and baseline accuracy). The check covers
-        // rotation in either Tm (text operator) or CTM (cm operator / Form
-        // XObject matrix).
+        // Calculate character bbox. TRM = CTM × Tm is the full text rendering
+        // matrix; for rotated/sheared text (b != 0 or c != 0) it is non-axis-
+        // aligned, but we apply the same 4-corner AABB path in both branches
+        // so that y-flipping matrices like `1 0 0 -1 tx ty` (Aspose.Words
+        // signature) are handled correctly — the cheaper additive approximation
+        // only holds for pure translations and would push bboxes off-page.
         let trm = state.ctm.mul(&state.tm);
         let is_rotated = trm.b.abs() > 1e-6 || trm.c.abs() > 1e-6;
-        let (x, y) = if is_rotated {
-            trm.apply(0.0, 0.0)
-        } else {
-            let (cx, cy) = state.ctm.apply(0.0, 0.0);
-            let (tx, ty) = state.tm.apply(0.0, 0.0);
-            (cx + tx, cy + ty)
-        };
 
         // Character width from font widths or estimate
         let code_val = if code_bytes.len() == 2 {
@@ -1120,7 +1112,19 @@ fn emit_string(
                     ay.max(by).max(cy2).max(dy),
                 ]
             } else {
-                [x + off, y, x + off + unit_w, y + char_height]
+                // 用 TRM(=CTM×Tm)的 4 角 AABB,正确处理 1 0 0 -1 等 y 翻转矩阵。
+                // 加法近似 [x+off, y, x+off+unit_w, y+char_height] 只对纯平移矩阵成立,
+                // 撞上 Aspose.Words 的 d=-1 翻转会把 bbox 推到错误象限被判出界丢弃。
+                let (ax, ay) = trm.apply(off, 0.0);
+                let (bx, by) = trm.apply(off + unit_w, 0.0);
+                let (cx2, cy2) = trm.apply(off, char_height);
+                let (dx, dy) = trm.apply(off + unit_w, char_height);
+                [
+                    ax.min(bx).min(cx2).min(dx),
+                    ay.min(by).min(cy2).min(dy),
+                    ax.max(bx).max(cx2).max(dx),
+                    ay.max(by).max(cy2).max(dy),
+                ]
             };
             result.chars.push(CharInfo {
                 c,

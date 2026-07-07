@@ -576,6 +576,14 @@ pub fn reading_order_sort_with_diagnostics(
     //       box of rotated text and extends far beyond the page. These are
     //       noise for layout purposes — drop them so they don't displace
     //       legitimate body blocks in the reading order.
+    //
+    // Exception: when the *majority* of body blocks fail only the margin check
+    // (i.e. they pass slack but lie just beyond the 10% margin, all in the same
+    // off-page direction), we treat it as a coordinate-system convention rather
+    // than noise. Aspose.Words produces PDFs whose CTM `1 0 0 -1 tx ty` and
+    // Tm `1 0 0 -1 0 ty'` compose to a positive y-scale (the two flips cancel),
+    // placing body text at device y > page_height. Such text is legitimately
+    // the document body and must not be dropped.
     let page_w = (page_rect[2] - page_rect[0]).abs().max(1.0);
     let page_h = (page_rect[3] - page_rect[1]).abs().max(1.0);
     let slack_x = page_w * 2.0;
@@ -583,6 +591,26 @@ pub fn reading_order_sort_with_diagnostics(
     let margin_x = page_w * 0.1;
     let margin_y = page_h * 0.1;
     let before = blocks.len();
+    let only_margin_fail = blocks
+        .iter()
+        .filter(|b| {
+            let x0 = b.bbox[0].min(b.bbox[2]);
+            let x1 = b.bbox[0].max(b.bbox[2]);
+            let y0 = b.bbox[1].min(b.bbox[3]);
+            let y1 = b.bbox[1].max(b.bbox[3]);
+            let slack_ok = x0 >= page_rect[0] - slack_x
+                && x1 <= page_rect[2] + slack_x
+                && y0 >= page_rect[1] - slack_y
+                && y1 <= page_rect[3] + slack_y;
+            let margin_ok = x1 <= page_rect[2] + margin_x
+                && x0 >= page_rect[0] - margin_x
+                && y1 <= page_rect[3] + margin_y
+                && y0 >= page_rect[1] - margin_y;
+            slack_ok && !margin_ok
+        })
+        .count();
+    // >50% blocks failing only margin ⇒ coordinate convention, skip margin filter.
+    let skip_margin = only_margin_fail * 2 > before;
     let blocks: Vec<TextBlock> = blocks
         .into_iter()
         .filter(|b| {
@@ -591,14 +619,19 @@ pub fn reading_order_sort_with_diagnostics(
             let y0 = b.bbox[1].min(b.bbox[3]);
             let y1 = b.bbox[1].max(b.bbox[3]);
             // Reject if either edge is far outside the page rect.
-            x0 >= page_rect[0] - slack_x
+            // The margin check is skipped when we detected a coordinate-
+            // system convention (skip_margin) — see comment above.
+            let slack_ok = x0 >= page_rect[0] - slack_x
                 && x1 <= page_rect[2] + slack_x
                 && y0 >= page_rect[1] - slack_y
-                && y1 <= page_rect[3] + slack_y
-                && x1 <= page_rect[2] + margin_x
-                && x0 >= page_rect[0] - margin_x
-                && y1 <= page_rect[3] + margin_y
-                && y0 >= page_rect[1] - margin_y
+                && y1 <= page_rect[3] + slack_y;
+            let margin_ok = skip_margin || (
+                x1 <= page_rect[2] + margin_x
+                    && x0 >= page_rect[0] - margin_x
+                    && y1 <= page_rect[3] + margin_y
+                    && y0 >= page_rect[1] - margin_y
+            );
+            slack_ok && margin_ok
         })
         .collect();
     let dropped = before - blocks.len();
