@@ -1,5 +1,7 @@
 # flashpdf
 
+[English](README.en.md) · **简体中文**
+
 **文本提取 + 页面渲染速度最快的 PDF 库**。Rust 核心 + Python 绑定。
 
 > 在 165-PDF PyMuPDF bug-regression 病理语料上：

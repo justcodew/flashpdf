@@ -1,5 +1,7 @@
 # flashpdf API 文档
 
+[English](API.en.md) · **简体中文**
+
 ## Python API
 
 ### `flashpdf.extract(path, page_parallel=True, include_images=True, gpu=False, batch_size=50)`
