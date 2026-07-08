@@ -625,12 +625,11 @@ pub fn reading_order_sort_with_diagnostics(
                 && x1 <= page_rect[2] + slack_x
                 && y0 >= page_rect[1] - slack_y
                 && y1 <= page_rect[3] + slack_y;
-            let margin_ok = skip_margin || (
-                x1 <= page_rect[2] + margin_x
+            let margin_ok = skip_margin
+                || (x1 <= page_rect[2] + margin_x
                     && x0 >= page_rect[0] - margin_x
                     && y1 <= page_rect[3] + margin_y
-                    && y0 >= page_rect[1] - margin_y
-            );
+                    && y0 >= page_rect[1] - margin_y);
             slack_ok && margin_ok
         })
         .collect();

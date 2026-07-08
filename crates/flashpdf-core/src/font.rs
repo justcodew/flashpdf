@@ -556,7 +556,7 @@ pub fn extract_font_info(font_obj: &PdfObject<'_>) -> FontInfo {
         widths,
         first_char,
         default_width,
-        cmap: None, // Populated later from ToUnicode stream
+        cmap: None,             // Populated later from ToUnicode stream
         ttf_reverse_cmap: None, // Populated later from FontFile2 cmap
         differences,
         cid_font: None, // Populated for Type0 fonts
@@ -826,7 +826,9 @@ fn build_ttf_reverse_cmap<'a>(
     };
     let filter = dict.iter().find(|(k, _)| *k == b"Filter").map(|(_, v)| v);
     let raw = match filter {
-        Some(f) => crate::parser::xref::decompress_stream(data, f).unwrap_or_else(|_| data.to_vec()),
+        Some(f) => {
+            crate::parser::xref::decompress_stream(data, f).unwrap_or_else(|_| data.to_vec())
+        }
         None => data.to_vec(),
     };
 
@@ -853,8 +855,11 @@ fn parse_ttf_cmap_reverse(raw: &[u8]) -> Option<HashMap<u32, char>> {
         let o = dir_off + i * 16;
         let tag = &raw[o..o + 4];
         if tag == b"cmap" {
-            cmap_off = Some(u32::from_be_bytes([raw[o + 8], raw[o + 9], raw[o + 10], raw[o + 11]]) as usize);
-            cmap_len = u32::from_be_bytes([raw[o + 12], raw[o + 13], raw[o + 14], raw[o + 15]]) as usize;
+            cmap_off = Some(
+                u32::from_be_bytes([raw[o + 8], raw[o + 9], raw[o + 10], raw[o + 11]]) as usize,
+            );
+            cmap_len =
+                u32::from_be_bytes([raw[o + 12], raw[o + 13], raw[o + 14], raw[o + 15]]) as usize;
             break;
         }
     }
@@ -881,8 +886,8 @@ fn parse_ttf_cmap_reverse(raw: &[u8]) -> Option<HashMap<u32, char>> {
         // Only Unicode-mapped subtables give us GID→Unicode. Microsoft
         // platform (3) encoding 1 (Unicode BMP) and 10 (Unicode full), and
         // platform 0 (Unicode) any encoding. Skip MacRoman (1/0).
-        let is_unicode = (platform_id == 3 && (encoding_id == 1 || encoding_id == 10))
-            || platform_id == 0;
+        let is_unicode =
+            (platform_id == 3 && (encoding_id == 1 || encoding_id == 10)) || platform_id == 0;
         if !is_unicode {
             continue;
         }
@@ -890,7 +895,11 @@ fn parse_ttf_cmap_reverse(raw: &[u8]) -> Option<HashMap<u32, char>> {
         parse_cmap_subtable(raw, sub_abs, format, &mut map);
     }
 
-    if map.is_empty() { None } else { Some(map) }
+    if map.is_empty() {
+        None
+    } else {
+        Some(map)
+    }
 }
 
 /// Parse a single cmap subtable into the reverse map. Formats 0/6 use u16
@@ -933,10 +942,21 @@ fn parse_cmap_subtable(raw: &[u8], off: usize, format: u16, map: &mut HashMap<u3
                 return;
             }
             for i in 0..seg_count {
-                let end_c = u16::from_be_bytes([raw[end_codes_off + i * 2], raw[end_codes_off + i * 2 + 1]]) as u32;
-                let start_c = u16::from_be_bytes([raw[start_codes_off + i * 2], raw[start_codes_off + i * 2 + 1]]) as u32;
-                let delta = i16::from_be_bytes([raw[id_delta_off + i * 2], raw[id_delta_off + i * 2 + 1]]) as i32;
-                let ro = u16::from_be_bytes([raw[id_range_offset_off + i * 2], raw[id_range_offset_off + i * 2 + 1]]) as usize;
+                let end_c = u16::from_be_bytes([
+                    raw[end_codes_off + i * 2],
+                    raw[end_codes_off + i * 2 + 1],
+                ]) as u32;
+                let start_c = u16::from_be_bytes([
+                    raw[start_codes_off + i * 2],
+                    raw[start_codes_off + i * 2 + 1],
+                ]) as u32;
+                let delta =
+                    i16::from_be_bytes([raw[id_delta_off + i * 2], raw[id_delta_off + i * 2 + 1]])
+                        as i32;
+                let ro = u16::from_be_bytes([
+                    raw[id_range_offset_off + i * 2],
+                    raw[id_range_offset_off + i * 2 + 1],
+                ]) as usize;
                 // Skip the sentinel segment 0xFFFF–0xFFFF.
                 if start_c == 0xFFFF && end_c == 0xFFFF {
                     continue;
@@ -995,7 +1015,9 @@ fn parse_cmap_subtable(raw: &[u8], off: usize, format: u16, map: &mut HashMap<u3
             if off + 16 > raw.len() {
                 return;
             }
-            let num_groups = u32::from_be_bytes([raw[off + 12], raw[off + 13], raw[off + 14], raw[off + 15]]) as usize;
+            let num_groups =
+                u32::from_be_bytes([raw[off + 12], raw[off + 13], raw[off + 14], raw[off + 15]])
+                    as usize;
             let body = off + 16;
             if body + num_groups * 12 > raw.len() {
                 return;
@@ -1004,7 +1026,8 @@ fn parse_cmap_subtable(raw: &[u8], off: usize, format: u16, map: &mut HashMap<u3
                 let o = body + g * 12;
                 let start_c = u32::from_be_bytes([raw[o], raw[o + 1], raw[o + 2], raw[o + 3]]);
                 let end_c = u32::from_be_bytes([raw[o + 4], raw[o + 5], raw[o + 6], raw[o + 7]]);
-                let start_gid = i32::from_be_bytes([raw[o + 8], raw[o + 9], raw[o + 10], raw[o + 11]]);
+                let start_gid =
+                    i32::from_be_bytes([raw[o + 8], raw[o + 9], raw[o + 10], raw[o + 11]]);
                 for c in start_c..=end_c {
                     let gid = if format == 12 {
                         (start_gid + (c - start_c) as i32) as u32
@@ -1022,7 +1045,6 @@ fn parse_cmap_subtable(raw: &[u8], off: usize, format: u16, map: &mut HashMap<u3
         _ => {} // formats 2, 8, 10, 14 — rare or never seen with Aspose output
     }
 }
-
 
 /// Strip PFB binary section headers, concatenating the ASCII payload.
 fn strip_pfb_header(raw: &[u8]) -> String {
@@ -1309,10 +1331,7 @@ fn parse_cid_widths(cid_obj: &PdfObject<'_>) -> Vec<CIDWidthRange> {
                 } else {
                     1
                 };
-                let w = w_array
-                    .get(i + 2)
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
+                let w = w_array.get(i + 2).and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let widths = vec![w; count];
                 ranges.push(CIDWidthRange { c_first, widths });
                 i += 3;
@@ -2096,7 +2115,8 @@ mod tests {
             widths: vec![],
             first_char: 0,
             default_width: 600.0,
-            cmap: None, ttf_reverse_cmap: None,
+            cmap: None,
+            ttf_reverse_cmap: None,
             differences: None,
             cid_font: None,
             flags: 0,
@@ -2116,7 +2136,8 @@ mod tests {
             widths: vec![],
             first_char: 0,
             default_width: 600.0,
-            cmap: None, ttf_reverse_cmap: None,
+            cmap: None,
+            ttf_reverse_cmap: None,
             differences: None,
             cid_font: None,
             flags: 0,
@@ -2144,7 +2165,8 @@ mod tests {
             widths: vec![],
             first_char: 0,
             default_width: 600.0,
-            cmap: None, ttf_reverse_cmap: None,
+            cmap: None,
+            ttf_reverse_cmap: None,
             differences: None,
             cid_font: None,
             flags: 0,
@@ -2171,7 +2193,8 @@ mod tests {
             widths: vec![],
             first_char: 0,
             default_width: 600.0,
-            cmap: None, ttf_reverse_cmap: None,
+            cmap: None,
+            ttf_reverse_cmap: None,
             differences: None,
             cid_font: None,
             flags: 0,
