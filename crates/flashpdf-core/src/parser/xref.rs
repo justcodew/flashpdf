@@ -959,7 +959,7 @@ mod tests {
     /// Helper: encode `original` (a flat byte stream of `n_rows × columns`
     /// bytes) using a single PNG filter, with per-row filter byte prefix.
     fn encode_with_filter(original: &[u8], columns: usize, filter: u8) -> Vec<u8> {
-        assert!(original.len() % columns == 0);
+        assert!(original.len().is_multiple_of(columns));
         let mut out = Vec::new();
         let mut prev_row: Vec<u8> = vec![0u8; columns];
         for row in original.chunks(columns) {

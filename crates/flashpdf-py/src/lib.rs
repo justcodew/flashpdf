@@ -759,11 +759,11 @@ impl PyPage {
         #[cfg(not(feature = "render"))]
         {
             let _ = (py, dpi, output);
-            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+            Err(pyo3::exceptions::PyNotImplementedError::new_err(
                 "page.get_pixmap() requires the 'render' Cargo feature. \
                  Reinstall the wheel with the render build: \
                  maturin develop --release --features render",
-            ));
+            ))
         }
         #[cfg(feature = "render")]
         {
