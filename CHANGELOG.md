@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.1] - 2026-07-08
+
+### Changed
+
+- 同步 main 分支的 CI / 文档改动：clippy `needless_return` +
+  `manual_is_multiple_of` 修复（CI 在 rust 1.96 上恢复绿色）、`cargo fmt`、
+  补 DESIGN_V1/V2 设计文档。**无运行时行为变化**——wheel 内容功能上与
+  v0.9.0 等价，只是把 main 状态对齐到 PyPI。
+
 ## [0.9.0] - 2026-07-08
 
 ### Fixed
