@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "flashpdf"
-version = "0.8.2"
+version = "0.9.0"
 description = "The fastest PDF text and image extraction engine. Rust core + Python bindings."
 readme = "README.md"
 license = {text = "MIT"}

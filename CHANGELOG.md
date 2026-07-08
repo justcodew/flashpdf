@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.9.0] - 2026-07-08
+
+### Fixed
+
+- **CIDFont `/W` range parsing caused OOM** on Adobe InDesign-generated PDFs
+  (e.g. PyMuPDF bug-regression `test_2791_content.pdf`). The parser misread
+  PDF spec §9.7.4.3 Table 123 — the `(c_first c_last w)` form takes a single
+  width `w` applied to the whole range, not `c_last - c_first + 1` distinct
+  widths. Misreading desynced the parser, producing a malformed `c_first >
+  c_last` pair whose `(c_last - c_first + 1) as usize` underflowed to ~2^64,
+  exploding `Vec::with_capacity` to multi-GB allocations and 20s+ runtime
+  (or SIGKILL by the OS). Fixed by taking exactly one width, advancing the
+  cursor by 3, and guarding against `c_last < c_first`. The 418KB
+  `test_2791_content.pdf` now extracts in 0.03s / 12MB peak.
+
+### Changed
+
+- README benchmark numbers refreshed from a full-corpus re-run. With the
+  OOM gone, flashpdf is back to **165/165, 0% failure rate** on the PyMuPDF
+  bug-regression corpus (mean 6.25ms / p50 1.19ms; vs pdf_oxide 2.83x and
+  vs liteparse 2.90x by total time). Test count corrected from "39" to 161.
+
 ## [0.8.2] - 2026-06-28
 
 补丁发布：v0.8.1 漏了 `NOTICE` 文件的 sdist include。PyPI 同样以

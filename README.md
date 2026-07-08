@@ -327,6 +327,7 @@ cargo bench -p flashpdf-core   # 性能基准
 - [x] **v0.7.1** 渲染：PDFium `render` feature · `get_pixmap` · `render_only`
 - [x] **v0.7.2** 内联图像：BI/ID/EI · `inline_image_count` 诊断
 - [x] **v0.7.3** page-tree bug fix：165/165 渲染零失败（`/Prev` 链 + PNG predictor + Compressed entries）
+- [x] **v0.9.0** CIDFont `/W` 解析 bug fix：消除 Adobe InDesign PDF 的 OOM，165/165 文本提取零失败
 
 详见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
